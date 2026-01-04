@@ -1,0 +1,19 @@
+defaults:  
+  - _self_  
+
+model:
+  llm_name: "meta-llama/Meta-Llama-3-8B"
+  embed_name: "BAAI/bge-m3"
+  cache_dir: "/data/horse/ws/s4610340-culture_agent/.cache"
+
+storage:
+  persist_dir: "./storage"
+
+retrieval:
+  top_k: 5
+  mode: "reciprocal_rank_fusion"
+
+target_topic_templates:
+  - "Culture of {}"
+  - "Music of {}"
+  - "Cuisine of {}"
