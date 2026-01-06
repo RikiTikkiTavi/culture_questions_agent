@@ -11,6 +11,9 @@ vector_store:
   cache_dir: ${model.cache_dir}
   embedding_model_name: "BAAI/bge-m3"
   persist_dir: "/data/horse/ws/s4610340-culture_agent/culture_questions_agent/storage"
+  wikivoyage_xml_path: wikivoyage.xml
+  chunk_size: 512
+  chunk_overlap: 50
 
 retrieval:
   num_queries: 3  # Number of search queries to generate from question
@@ -18,10 +21,12 @@ retrieval:
   use_question_context: true  # Include question context in NLL prediction
   use_option_context: false    # Include option-specific context in NLL prediction
   max_search_chars: 5000  # Maximum characters to keep from search results
-  max_web_search_results: 3
-  include_title: true  # Include title in search snippets
+  max_web_search_results: 5
+  include_title: false  # Include title in search snippets
   use_reranker: true  # Use reranker to select top results
   reranker_top_k: 3  # Number of top results to keep after reranking
+  include_options_in_query: false  # Include options in search query when using reranker
+  ddgs_backend: "yandex,yahoo"  # DDGS search backends to use
 
 mlflow:
   tracking_uri: "sqlite:///tracking/mlruns.sqlite"

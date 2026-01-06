@@ -10,19 +10,22 @@ logger = logging.getLogger(__name__)
 class SearchEngine:
     """Search engine using Wikipedia and DDGS (multi-engine web search) as fallback."""
     
-    def __init__(self, max_chars: int = 2500, include_title: bool = True):
+    def __init__(self, max_chars: int = 2500, include_title: bool = True, ddgs_backend: str = "yandex,yahoo,wikipedia,grokipedia"):
         """
         Initialize search tools.
         
         Args:
             max_chars: Maximum characters to keep from search results
             include_title: Whether to include titles in search snippets
+            ddgs_backend: Comma-separated list of DDGS backends to use
         """
         logger.info("Initializing search tools...")
         self.max_chars = max_chars
         self.include_title = include_title
+        self.ddgs_backend = ddgs_backend
         logger.info(f"  Max search result length: {max_chars} chars")
         logger.info(f"  Include titles in snippets: {include_title}")
+        logger.info(f"  DDGS backends: {ddgs_backend}")
         
         # Wikipedia search (primary)
         self.wikipedia_tool = WikipediaToolSpec()
@@ -85,7 +88,7 @@ class SearchEngine:
         
         try:
             # Use text search from ddgs
-            results = list(self.ddgs.text(query, max_results=max_results, region="wt-wt"),)
+            results = list(self.ddgs.text(query, max_results=max_results, region="us-en", backend=self.ddgs_backend),)
             
             if results:
                 cleaned_snippets = []

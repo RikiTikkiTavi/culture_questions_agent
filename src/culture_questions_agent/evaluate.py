@@ -18,16 +18,14 @@ from mlflow.genai import scorer
 logger = logging.getLogger(__name__)
 
 def build_predict_fn(wf: CulturalQAWorkflow):
-    def predict_fn(inputs: dict) -> str:
+    async def predict_fn(question: str, options: dict[str, str]) -> str:
         """Predict function for MLflow evaluation."""
-        question = MCQQuestion(
-            question=inputs["question"],
-            options=inputs["options"],
+        mcq_question = MCQQuestion(
+            question=question,
+            options=options,
         )
-        future = wf.run(mcq_question=question)
-        result = asyncio.run(asyncio.wait_for(future, timeout=1800))
-        return result
-    
+        return await wf.run(mcq_question=mcq_question)
+            
     return predict_fn
 
 @scorer
@@ -84,7 +82,7 @@ def main(cfg: DictConfig) -> None:
     mlflow.autolog()
 
     # Log hydra config to mlflow
-    mlflow.log_dict(flatten(OmegaConf.to_container(cfg, resolve=True)), "config.yaml")
+    mlflow.log_params(flatten(OmegaConf.to_container(cfg, resolve=True)))
 
     logger.info("="*80)
     logger.info("CULTURAL QA SYSTEM - NLL-based Approach")
@@ -100,7 +98,7 @@ def main(cfg: DictConfig) -> None:
         verbose=True
     )
     
-    mcq_questions = read_mcq_data_train(Path("data/train_dataset_mcq.csv"))
+    mcq_questions = read_mcq_data_train(Path("data/train_dataset_mcq.csv"))[:50]
 
 
     logger.info("="*80)

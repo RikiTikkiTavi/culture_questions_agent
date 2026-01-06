@@ -33,7 +33,7 @@ class SearchEvent(Event):
     """Event carrying search results for question and each option."""
     question: str
     options: Dict[str, str]
-    question_context: str  # Search result for question
+    question_context: list[str]  # Search result for question
     option_contexts: Dict[str, str]  # option_key -> search result text
 
 
@@ -81,7 +81,8 @@ class CulturalQAWorkflow(Workflow):
         logger.info(f"[3/4] Initializing Search Engine (Wikipedia + DDGS)")
         self.search_engine = SearchEngine(
             max_chars=cfg.retrieval.get("max_search_chars", 2500),
-            include_title=cfg.retrieval.get("include_title", True)
+            include_title=cfg.retrieval.get("include_title", True),
+            ddgs_backend=cfg.retrieval.get("ddgs_backend", "yandex,yahoo,wikipedia,grokipedia")
         )
         
         # [4] Initialize Reranker (optional)
@@ -166,13 +167,20 @@ class CulturalQAWorkflow(Workflow):
 
         # --- Path 1: Question Context (Use DDGS web search) ---
         # Search Engine is better at "Question Answering"
+        include_options = self.cfg.retrieval.get("include_options_in_query", True)
+        
         for q in ev.question_queries:
             logger.info(f"  [Path 1 - Web] Searching: '{q}'")
+            
+            # Build query with options if configured
+            query = q
+            if self.use_reranker and include_options:
+                query = q + " " + " ".join(ev.options.values())
             
             # Get search results as list if using reranker, else as concatenated string
             if self.use_reranker:
                 search_results = self.search_engine.search_web(
-                    q, 
+                    query, 
                     max_results=self.cfg.retrieval.get("max_web_search_results", 5),
                     return_list=True
                 )
@@ -180,14 +188,15 @@ class CulturalQAWorkflow(Workflow):
                     all_question_snippets.extend(search_results)
             else:
                 search_result = self.search_engine.search_web(
-                    q, 
+                    query, 
                     max_results=self.cfg.retrieval.get("max_web_search_results", 3)
                 )
                 if search_result:
                     all_question_snippets.append(search_result)
 
             time.sleep(3.0)  # To avoid rate limiting
-        
+
+
         # Rerank if enabled
         if self.use_reranker and all_question_snippets and self.reranker:
             logger.info(f"  Reranking {len(all_question_snippets)} snippets...")
@@ -198,11 +207,11 @@ class CulturalQAWorkflow(Workflow):
                 top_k=top_k
             )
             # Extract just the documents from reranked results
-            question_context = "\n---\n".join([doc for _, doc, _ in reranked])
+            context_snippets = [doc for _, doc, _ in reranked]
         else:
-            question_context = "\n---\n".join(all_question_snippets)
+            context_snippets = all_question_snippets
         
-        logger.info(f"  Final question context length: {len(question_context)} chars")
+        logger.info(f"  Final question context length: {len(context_snippets)}")
         
         options_contexts = {}
 
@@ -233,7 +242,7 @@ class CulturalQAWorkflow(Workflow):
         return SearchEvent(
             question=ev.question,
             options=ev.options,
-            question_context=question_context,
+            question_context=context_snippets,
             option_contexts=options_contexts
         )
     
@@ -258,34 +267,15 @@ class CulturalQAWorkflow(Workflow):
         
         # Build contexts for each option:
         # Combine question context + option-specific context based on config
-        combined_contexts = {}
         
-        for opt_key in ev.options.keys():
-            # Get individual contexts
-            question_ctx = ev.question_context if use_question_ctx else ""
-            option_ctx = ev.option_contexts.get(opt_key, "") if use_option_ctx else ""
-            
-            # Combine based on what's available and enabled
-            if question_ctx and option_ctx:
-                # Both contexts available and enabled
-                combined = f"General Context: {question_ctx}\n\nSpecific Definition: {option_ctx}"
-            elif question_ctx:
-                # Only question context
-                combined = question_ctx
-            elif option_ctx:
-                # Only option context
-                combined = option_ctx
-            else:
-                # No context (zero-shot)
-                combined = ""
-            
-            combined_contexts[opt_key] = combined
-        
+        question_ctx = ev.question_context if use_question_ctx else [""]
+
         # Predict using NLL
         best_option, losses = self.nll_predictor.predict_best_option(
             question=ev.question,
             options=ev.options,
-            contexts=combined_contexts
+            option_contexts=ev.option_contexts,
+            question_contexts=question_ctx,
         )
         
         logger.info(f"  ✓ Selected: {best_option} - {ev.options[best_option]}")

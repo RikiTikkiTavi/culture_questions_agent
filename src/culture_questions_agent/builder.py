@@ -36,7 +36,8 @@ OVERRIDES = {
     "Moldova, Republic of": "Moldova",
     "Venezuela, Bolivarian Republic of": "Venezuela",
     "Brunei Darussalam": "Brunei",
-    "Eswatini": "Swaziland"
+    "Eswatini": "Swaziland",
+    "United Arab Emirates": "UAE",
 }
 
 
@@ -195,11 +196,12 @@ def load_wikipedia_documents(cfg) -> Tuple[List[Document], Dict]:
     templates = [
         "Culture of {}",
         "Public holidays in {}",
-        "Traditional food of {}",
+        "Cuisine of {}",
+        "Education in {}",
         "Music of {}",
     ]
     
-    for country in countries:
+    for country in countries[:10]:
         for template in templates:
             topics.append(template.format(country))
     
@@ -265,8 +267,8 @@ def build_atlas(cfg) -> VectorStoreIndex:
     
     # Configure global settings
     Settings.embed_model = embed_model
-    Settings.chunk_size = 512
-    Settings.chunk_overlap = 50
+    Settings.chunk_size = cfg.vector_store.chunk_size
+    Settings.chunk_overlap = cfg.vector_store.chunk_overlap
     
     # Load documents from multiple sources
     all_documents = []
@@ -301,14 +303,14 @@ def build_atlas(cfg) -> VectorStoreIndex:
     )
     
     # Persist index
-    persist_dir = Path(cfg.storage.persist_dir)
+    persist_dir = Path(cfg.vector_store.persist_dir)
     persist_dir.mkdir(parents=True, exist_ok=True)
     
     logger.info(f"[5/5] Persisting index to: {persist_dir}")
     index.storage_context.persist(persist_dir=str(persist_dir))
     
     # Save extraction report to hydra output directory
-    report_path = Path.cwd() / "wikipedia_extraction_report.json"
+    report_path = persist_dir / "wikipedia_extraction_report.json"
     with open(report_path, 'w') as f:
         json.dump(extraction_report, f, indent=2)
     logger.info(f"  ✓ Extraction report saved to: {report_path}")

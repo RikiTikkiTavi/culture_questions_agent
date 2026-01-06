@@ -1,15 +1,17 @@
+{% if context_parts %}
 Context:
 {% for part in context_parts %}
-[{{ part.index }}] {{ part.text }}
+{{ part }}
 {% endfor %}
 
+{% endif %}
 Question: What is the capital of France?
 Options:
 A. London
 B. Paris
 C. Berlin
 D. Madrid
-Answer: B
+Answer: Paris
 
 Question: Which instrument is traditional in Japanese music?
 Options:
@@ -17,9 +19,9 @@ A. Guitar
 B. Piano
 C. Koto
 D. Violin
-Answer: C
+Answer: Koto
 
-Question: {{ query }}
+Question: {{ question }}
 Options:
 {% for key, value in options.items() %}
 {{ key }}. {{ value }}

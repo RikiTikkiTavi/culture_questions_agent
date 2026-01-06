@@ -75,7 +75,8 @@ class NLLPredictor:
         self,
         question: str,
         options: Dict[str, str],
-        contexts: Dict[str, str]
+        option_contexts: Dict[str, str],
+        question_contexts: list[str]
     ) -> Tuple[str, Dict[str, float]]:
         """
         Predict the best option using NLL loss.
@@ -83,7 +84,8 @@ class NLLPredictor:
         Args:
             question: The question text
             options: Dictionary mapping option keys to option texts
-            contexts: Dictionary mapping option keys to context texts
+            option_contexts: Dictionary mapping option keys to context texts
+            question_contexts: List of context texts for the question
             
         Returns:
             Tuple of (best_option_key, dict of losses)
@@ -93,11 +95,28 @@ class NLLPredictor:
         losses = {}
         
         for opt_key, opt_text in options.items():
-            # Get context for this option
-            context = contexts.get(opt_key, "")
+            # Get option-specific context
+            option_context = option_contexts.get(opt_key, "")
+            
+            # Build formatted context sections
+            context_parts = []
+            
+            # Add question contexts (numbered)
+            if question_contexts:
+                for i, ctx in enumerate(question_contexts, 1):
+                    if ctx.strip():
+                        context_parts.append(f"[{i}] {ctx.strip()}")
+            
+            # Add option-specific context (if exists)
+            if option_context.strip():
+                context_parts.append(f"[Definition] {option_context.strip()}")
             
             # Build prompt
-            prompt = f"Context: {context}\nQuestion: {question}\nAnswer: {opt_text}"
+            if context_parts:
+                combined_context = "\n".join(context_parts)
+                prompt = f"Context:\n{combined_context}\n\nQuestion: {question}\nAnswer: {opt_text}"
+            else:
+                prompt = f"Question: {question}\nAnswer: {opt_text}"
             
             # Compute NLL
             loss = self.compute_nll(prompt)
