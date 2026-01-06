@@ -196,6 +196,13 @@ class CulturalQAWorkflow(Workflow):
 
             time.sleep(3.0)  # To avoid rate limiting
 
+        # Deduplicate snippets before reranking
+        if all_question_snippets:
+            original_count = len(all_question_snippets)
+            all_question_snippets = list(set(all_question_snippets))
+            
+            if original_count > len(all_question_snippets):
+                logger.info(f"  Deduplicated: {original_count} → {len(all_question_snippets)} snippets")
 
         # Rerank if enabled
         if self.use_reranker and all_question_snippets and self.reranker:
