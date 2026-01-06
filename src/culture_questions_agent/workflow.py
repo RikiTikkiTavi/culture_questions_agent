@@ -219,13 +219,13 @@ class CulturalQAWorkflow(Workflow):
                 
                 # Use the "Entity" query (e.g. "Hanbok definition")
                 query = self.query_generator.generate_option_query(opt_text)
-                logger.info(f"    [{opt_key}] '{opt_text}' → Query: '{query}'")
+                logger.debug(f"    [{opt_key}] '{opt_text}' → Query: '{query}'")
                 
                 # FORCE Wikipedia for option definitions
                 search_result = self.search_engine.search_wikipedia(query)
                 options_contexts[opt_key] = search_result
 
-                logger.info(f"    [{opt_key}] Search result: ''{search_result[:200]}''")
+                logger.debug(f"    [{opt_key}] Search result: ''{search_result[:200]}''")
         else:
             logger.info(f"  [Path 2] Skipping option queries (use_option_context=False)")
 

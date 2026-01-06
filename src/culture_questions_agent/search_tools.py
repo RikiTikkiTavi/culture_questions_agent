@@ -85,7 +85,7 @@ class SearchEngine:
         
         try:
             # Use text search from ddgs
-            results = list(self.ddgs.text(query, max_results=max_results))
+            results = list(self.ddgs.text(query, max_results=max_results, region="wt-wt"),)
             
             if results:
                 cleaned_snippets = []
