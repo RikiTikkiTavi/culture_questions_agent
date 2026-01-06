@@ -6,6 +6,12 @@ model:
   cache_dir: "/data/horse/ws/s4610340-culture_agent/.cache"
   reranker_name: "BAAI/bge-reranker-v2-m3"
 
+vector_store:
+  auto_suggest: false
+  cache_dir: ${model.cache_dir}
+  embedding_model_name: "BAAI/bge-m3"
+  persist_dir: "/data/horse/ws/s4610340-culture_agent/culture_questions_agent/storage"
+
 retrieval:
   num_queries: 3  # Number of search queries to generate from question
   use_direct_question: false  # Use question directly for search instead of generating queries
