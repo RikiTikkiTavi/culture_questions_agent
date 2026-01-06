@@ -3,20 +3,20 @@ defaults:
 
 model:
   llm_name: "meta-llama/Llama-3.1-8B"
-  embed_name: "BAAI/bge-m3"
   cache_dir: "/data/horse/ws/s4610340-culture_agent/.cache"
-
-storage:
-  persist_dir: "./storage"
+  reranker_name: "BAAI/bge-reranker-v2-m3"
 
 retrieval:
-  top_k: 5
-  mode: "reciprocal_rerank"
-
-target_topic_templates:
-  - "Culture of {}"
-  - "Music of {}"
-  - "Cuisine of {}"
+  num_queries: 3  # Number of search queries to generate from question
+  use_direct_question: false  # Use question directly for search instead of generating queries
+  use_question_context: true  # Include question context in NLL prediction
+  use_option_context: false    # Include option-specific context in NLL prediction
+  max_search_chars: 5000  # Maximum characters to keep from search results
+  max_web_search_results: 3
+  include_title: true  # Include title in search snippets
+  use_reranker: true  # Use reranker to select top results
+  reranker_top_k: 3  # Number of top results to keep after reranking
 
 mlflow:
-  tracking_uri: "mlruns"
+  tracking_uri: "sqlite:///tracking/mlruns.sqlite"
+  artifact_location: "tracking/artifacts"

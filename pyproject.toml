@@ -25,6 +25,11 @@ mlflow = "^3.8.1"
 jinja2 = "^3.1.4"
 pandas = "^2.3.3"
 ipykernel = "^7.1.0"
+keybert = "^0.9.0"
+llama-index-tools-wikipedia = "^0.4.1"
+llama-index-tools-google = "^0.6.2"
+llama-index-tools-duckduckgo = "^0.4.1"
+ddgs = "^9.10.0"
 
 [build-system]
 requires = ["poetry-core>=1.0.0"]

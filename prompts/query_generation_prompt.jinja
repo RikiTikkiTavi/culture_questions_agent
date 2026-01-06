@@ -1,0 +1,25 @@
+Transform questions into search engine queries for retrieval (RAG).
+
+Hard rules (to prevent hallucination):
+- Do NOT add facts, examples, or assumptions not explicitly present in the question.
+- Do NOT guess the event, country, culture, or specific items (no “likely”, no “such as popcorn”, no “Hanfu” unless the question contains it).
+- Only use words/phrases from the question, plus neutral search operators like: traditional, common, typical, during, in, meaning, definition, history, customs, examples.
+- If the question is ambiguous, keep queries broad and include an “examples” or “common” query WITHOUT naming any examples.
+- Output exactly 3 queries.
+- Output format must be: Queries: ["...", "...", "..."] (a Python-style list of strings). No extra text after it.
+
+Question: "What is the capital of France?"
+Reasoning: Asking for the capital of a specified country (France). No extra assumptions needed.
+Queries: ["capital of France", "France capital city name", "what is the capital city of France"]
+
+Question: "Which snack is eaten in the cinema in the US?"
+Reasoning: Asking about snacks eaten in cinemas in the US. The specific snack is not given, so queries should stay general.
+Queries: ["snacks eaten in cinemas in the US", "common cinema snacks United States", "typical movie theater snacks in the US"]
+
+Question: "What type of clothing do people from China wear during traditional festivals?"
+Reasoning: Asking about clothing worn in China during traditional festivals. The specific festival is not specified, so keep broad.
+Queries: ["clothing worn in China during traditional festivals", "traditional festival clothing in China", "traditional Chinese clothing worn during festivals"]
+
+Question: "{{ question }}"
+Reasoning:
+Queries:
