@@ -4,29 +4,43 @@ defaults:
 model:
   llm_name: "meta-llama/Llama-3.1-8B"
   cache_dir: "/data/horse/ws/s4610340-culture_agent/.cache"
-  reranker_name: "BAAI/bge-reranker-v2-m3"
+  reranker_name: "BAAI/bge-reranker-large"
 
 vector_store:
   auto_suggest: false
   cache_dir: ${model.cache_dir}
   embedding_model_name: "BAAI/bge-m3"
   persist_dir: "/data/horse/ws/s4610340-culture_agent/culture_questions_agent/storage"
-  wikivoyage_xml_path: wikivoyage.xml
+  wikivoyage_xml_path: /data/horse/ws/s4610340-culture_agent/culture_questions_agent/data/wiki/datasets/wikivoyage.xml
   chunk_size: 512
   chunk_overlap: 50
 
 retrieval:
+  # Query generation
   num_queries: 3  # Number of search queries to generate from question
   use_direct_question: false  # Use question directly for search instead of generating queries
+  
+  # Context usage
   use_question_context: true  # Include question context in NLL prediction
   use_option_context: false    # Include option-specific context in NLL prediction
+  
+  # Web search settings
   max_search_chars: 5000  # Maximum characters to keep from search results
-  max_web_search_results: 5
+  max_web_search_results: 10
   include_title: false  # Include title in search snippets
-  use_reranker: true  # Use reranker to select top results
+  ddgs_backend: "yandex,yahoo"  # DDGS search backends to use
+  
+  # Hybrid retrieval (BM25 + Vector) from local documents
+  use_hybrid_retrieval: true  # Enable hybrid retrieval from local vector store
+  hybrid_sparse_top_k: 10  # Number of results from BM25 sparse retrieval
+  hybrid_dense_top_k: 10   # Number of results from vector dense retrieval
+  hybrid_final_top_k: 5    # Number of final results after RRF fusion
+  hybrid_rrf_k: 60         # RRF constant (typically 60)
+  
+  # Reranking settings
+  use_reranker: true  # Use reranker to select top results from all sources
   reranker_top_k: 3  # Number of top results to keep after reranking
   include_options_in_query: false  # Include options in search query when using reranker
-  ddgs_backend: "yandex,yahoo"  # DDGS search backends to use
 
 mlflow:
   tracking_uri: "sqlite:///tracking/mlruns.sqlite"

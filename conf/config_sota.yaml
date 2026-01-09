@@ -1,0 +1,136 @@
+defaults:  
+  - _self_  
+
+model:
+  llm_name: "meta-llama/Llama-3.1-8B"
+  cache_dir: "/data/horse/ws/s4610340-culture_agent/.cache"
+  reranker_name: "BAAI/bge-reranker-v2-m3"  # Upgraded to v2-m3 for better quality
+
+vector_store:
+  auto_suggest: false
+  cache_dir: ${model.cache_dir}
+  embedding_model_name: "BAAI/bge-m3"
+  persist_dir: "/data/horse/ws/s4610340-culture_agent/culture_questions_agent/storage"
+  
+  # Wikivoyage configuration (NEW)
+  use_wikivoyage: false  # Set to true to include Wikivoyage data in the index
+  wikivoyage_xml_path: /data/horse/ws/s4610340-culture_agent/culture_questions_agent/data/wiki/datasets/wikivoyage.xml
+  wikivoyage_num_workers: 15  # Number of parallel workers for Wikivoyage parsing (null = CPU count - 1)
+  
+  # Wikipedia caching (NEW)
+  wikipedia_cache_dir: "cache/wikipedia"  # Cache directory for downloaded Wikipedia pages
+  force_wikipedia_refresh: false  # Set to true to force re-download (ignore cache)
+  
+  # Country filtering (NEW) - Reduce dataset size
+  country_limit: null  # Limit to first N countries (null/commented for all countries)
+  country_filter_list:  # 10 diverse, culturally rich countries
+    - "Japan"
+    - "France"
+    - "India"
+    - "China"
+    - "Brazil"
+    - "Egypt"
+    - "Mexico"
+    - "Italy"
+    - "Turkey"
+    - "South Korea"
+    - "Iran"
+    - "United Kingdom"
+    - "United States"
+    - "Ethiopia"
+    - "Greece"
+    - "Indonesia"
+    - "North Korea"
+    - "Spain"
+    - "Azerbaijan"
+  #   - "Jordan"
+  #   # Sub-Saharan Africa
+  #   - "South Africa"
+  #   - "Nigeria"
+  #   - "Ethiopia"
+  #   - "Kenya"
+  #   - "Ghana"
+  
+  # Topic templates (optional override)
+  # topic_templates:
+  #   - "Culture of {}"
+  #   - "Cuisine of {}"
+  #   - "Music of {}"
+  topic_templates:
+    - "Culture of {}"
+    - "Public holidays in {}"
+    - "Cuisine of {}"
+    - "Education in {}"
+    - "Geography of {}"
+    - "Economy of {}"
+    - "Agriculture in {}"
+    - "Demographics of {}"
+  
+  # Batch processing (NEW)
+  embed_batch_size: 128  # Batch size for embedding calculations (GPU memory dependent)
+  
+  # REMOVED: character-based chunking (obsolete)
+  # chunk_size: 512
+  # chunk_overlap: 50
+  
+  # NEW: Semantic chunking configuration
+  chunking_strategy: "multi_granularity"  # Options: "multi_granularity", "reranker_aligned"
+  tokenizer_name: "BAAI/bge-m3"  # Tokenizer for accurate token counting
+  
+  # Multi-granularity settings (when chunking_strategy = "multi_granularity")
+  granularities:
+    - small    # 200-400 tokens: facts, definitions
+    - medium   # 600-900 tokens: explanations
+    #- large    # 1500-3000 tokens: cultural/historical context
+  
+  # Reranker-aligned settings (when chunking_strategy = "reranker_aligned")
+  target_tokens: 900   # Target chunk size for reranker
+  max_tokens: 1200     # Maximum chunk size
+
+retrieval:
+  # Device configuration (H100 GPUs available)
+  device: "cuda"
+  
+  # Multi-retriever configuration
+  use_colbert: true    # Late-interaction retrieval (PRIMARY)
+  use_dense: false      # Dense retrieval (SECONDARY)
+  use_sparse: false     # Sparse retrieval (SUPPORTING)
+  use_reranker: true   # Cross-encoder reranking (FINAL DECISION)
+  
+  # ColBERT settings (late-interaction retrieval)
+  colbert_model: "colbert-ir/colbertv2.0"  # ColBERT v2
+  colbert_top_k: 50  # Number of results from ColBERT
+  
+  # Dense retrieval settings (BGE-M3)
+  hybrid_dense_top_k: 50  # Number of results from dense retrieval
+  
+  # Sparse retrieval settings (BM25)
+  hybrid_sparse_top_k: 50  # Number of results from BM25
+  
+  # Reranking settings (cross-encoder)
+  reranker_top_k: 5  # Final number of results after reranking
+  
+  # Legacy settings (for backward compatibility with existing code)
+  # Query generation
+  num_queries: 3  # Number of search queries to generate from question
+  use_direct_question: false  # Use question directly for search instead of generating queries
+  
+  # Context usage
+  use_question_context: true  # Include question context in NLL prediction
+  use_option_context: false    # Include option-specific context in NLL prediction
+  
+  # Web search settings (if web search is still used)
+  max_search_chars: 5000  # Maximum characters to keep from search results
+  max_web_search_results: 10
+  include_title: false  # Include title in search snippets
+  ddgs_backend: "yandex,yahoo"  # DDGS search backends to use
+
+  
+  include_options_in_query: false  # Include options in search query when using reranker
+
+# Optional: Run test query after building index
+run_test_query: false  # Set to true to validate retrieval system
+
+mlflow:
+  tracking_uri: "sqlite:///tracking/mlruns.sqlite"
+  artifact_location: "tracking/artifacts"

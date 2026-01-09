@@ -1,23 +1,38 @@
-Transform questions into search engine queries for retrieval (RAG).
+Transform questions into neutral search engine queries for retrieval (RAG).
 
-Hard rules (to prevent hallucination):
-- If question include units, keep them exactly.
-- If question includes specific names, places, events, or items, keep them exactly.
+Hard rules (must follow exactly):
+- Do NOT include the answer unless it is explicitly stated in the question.
+- Preserve all units, names, places, events, and entities exactly as written.
+- Do NOT add assumptions or conclusions.
+- Queries must be neutral, informational, and encyclopedic in tone.
 - Output exactly 3 queries.
-- Output format must be: Queries: ["...", "...", "..."] (a Python-style list of strings). No extra text after it.
+- Queries should be semantically different, not paraphrases.
+- Output format must be exactly:
+  Queries: ["...", "...", "..."]
+- Do NOT output any extra text.
+
+Examples:
 
 Question: "What is the capital of France?"
-Reasoning: Asking for the capital of a specified country (France). Paris should be capital of France.
-Queries: ["capital of France Paris", "France capital city name is Paris", "what is the capital city of France"]
+Queries: [
+  "capital city of France",
+  "France national capital",
+  "administrative capital of France"
+]
 
 Question: "Which snack is eaten in the cinema in the US?"
-Reasoning: Asking about snacks eaten in cinemas in the US. Popcorn is a common cinema snack in the US.
-Queries: ["snacks eaten in cinemas in the US popcorn", "common cinema snacks United States popcorn", "typical movie theater snacks in the US popcorn"]
+Queries: [
+  "cinema snacks in the United States",
+  "food commonly eaten in US movie theaters",
+  "movie theater snack culture in the US"
+]
 
 Question: "What type of clothing do people from China wear during traditional festivals?"
-Reasoning: Asking about clothing worn in China during traditional festivals. The specific festival is not specified, so keep broad.
-Queries: ["clothing worn in China during traditional festivals", "traditional festival clothing in China", "traditional Chinese clothing worn during festivals"]
+Queries: [
+  "traditional festival clothing in China",
+  "clothing worn during Chinese traditional festivals",
+  "traditional attire associated with Chinese festivals"
+]
 
 Question: "{{ question }}"
-Reasoning:
 Queries:

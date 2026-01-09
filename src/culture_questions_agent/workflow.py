@@ -18,6 +18,7 @@ from culture_questions_agent.query_generator import QueryGenerator
 from culture_questions_agent.search_tools import SearchEngine
 from culture_questions_agent.nll_predictor import NLLPredictor
 from culture_questions_agent.reranker import Reranker
+from culture_questions_agent.multi_retriever import MultiRetrieverOrchestrator
 
 logger = logging.getLogger(__name__)
 
@@ -78,23 +79,45 @@ class CulturalQAWorkflow(Workflow):
         )
         
         # [3] Initialize Search Engine
-        logger.info(f"[3/4] Initializing Search Engine (Wikipedia + DDGS)")
+        logger.info(f"[3/5] Initializing Search Engine (Wikipedia + DDGS)")
         self.search_engine = SearchEngine(
             max_chars=cfg.retrieval.get("max_search_chars", 2500),
             include_title=cfg.retrieval.get("include_title", True),
             ddgs_backend=cfg.retrieval.get("ddgs_backend", "yandex,yahoo,wikipedia,grokipedia")
         )
         
-        # [4] Initialize Reranker (optional)
-        self.use_reranker = cfg.retrieval.get("use_reranker", False)
+        # [4] Initialize SOTA Multi-Retriever (ColBERT + Dense + Sparse + Reranking)
+        use_retrieval = cfg.retrieval.get("use_hybrid_retrieval", True)
+        if use_retrieval:
+            logger.info(f"[4/5] Initializing SOTA Multi-Retriever (ColBERT + Dense + Sparse)")
+            try:
+                self.retriever = MultiRetrieverOrchestrator.from_persist_dir(
+                    persist_dir=cfg.vector_store.persist_dir,
+                    embedding_model_name=cfg.vector_store.embedding_model_name,
+                    cache_dir=cfg.model.cache_dir,
+                    device=cfg.retrieval.get("device", "cuda"),
+                )
+                # Note: Reranking is handled internally by MultiRetrieverOrchestrator
+                # No need for separate reranker initialization
+            except FileNotFoundError as e:
+                logger.warning(f"SOTA retriever initialization failed: {e}")
+                logger.warning("Continuing without retrieval. Run builder.py to create the index.")
+                self.retriever = None
+        else:
+            logger.info(f"[4/5] Local retrieval disabled")
+            self.retriever = None
+        
+        # [5] Reranker is now integrated into MultiRetrieverOrchestrator
+        # Legacy reranker for web search results only (if needed)
+        self.use_reranker = cfg.retrieval.get("use_reranker_for_web", False)
         if self.use_reranker:
-            logger.info(f"[4/4] Initializing Reranker: {cfg.model.get('reranker_name', 'BAAI/bge-reranker-v2-m3')}")
+            logger.info(f"[5/5] Initializing Web Search Reranker: {cfg.model.get('reranker_name', 'BAAI/bge-reranker-v2-m3')}")
             self.reranker = Reranker(
                 model_name=cfg.model.get("reranker_name", "BAAI/bge-reranker-v2-m3"),
                 cache_dir=cfg.model.cache_dir
             )
         else:
-            logger.info(f"[4/4] Reranker disabled")
+            logger.info(f"[5/5] Web search reranker disabled (orchestrator handles local reranking)")
             self.reranker = None
         
         logger.info("="*80)
@@ -148,9 +171,10 @@ class CulturalQAWorkflow(Workflow):
     @step
     async def search_for_options(self, ev: QueryGenerationEvent) -> SearchEvent:
         """
-        Execute dual-path retrieval:
-        - Path 1: Search for question context (ground truth)
-        - Path 2: Search for each option definition (verification)
+        Execute multi-source retrieval:
+        - Source 1: Hybrid retrieval (BM25 + Vector) from local documents
+        - Source 2: Web search (DDGS) for current information
+        - Combine and optionally rerank all results
         
         Args:
             ev: QueryGenerationEvent with question queries and options
@@ -158,19 +182,33 @@ class CulturalQAWorkflow(Workflow):
         Returns:
             SearchEvent with all search results
         """
-        logger.info(f"🔍 Dual-Path Search Execution")
-        
-        # Path 1: Question Context Search (use best query)
-        logger.info(f"  [Path 1] Question Context Search")
+        logger.info(f"🔍 Multi-Source Retrieval Execution")
         
         all_question_snippets = []
 
-        # --- Path 1: Question Context (Use DDGS web search) ---
-        # Search Engine is better at "Question Answering"
+        # --- Source 1: SOTA Multi-Retrieval from Local Documents ---
+        if self.retriever:
+            logger.info(f"  [Source 1] SOTA Multi-Retrieval (ColBERT + Dense + Sparse) from local documents")
+            
+            # Retrieve from local documents using SOTA multi-retriever
+            # retrieve_texts_batch returns list of text strings from top nodes
+            local_docs = self.retriever.retrieve_texts_batch(ev.question_queries)
+            
+            if local_docs:
+                logger.info(f"    Retrieved {len(local_docs)} documents from local index")
+                all_question_snippets.extend(local_docs)
+            else:
+                logger.info(f"    No results from local index")
+        else:
+            logger.info(f"  [Source 1] Hybrid retrieval disabled or unavailable")
+
+        # --- Source 2: Web Search (DDGS) ---
+        logger.info(f"  [Source 2] Web Search (DDGS)")
+        
         include_options = self.cfg.retrieval.get("include_options_in_query", True)
         
         for q in ev.question_queries:
-            logger.info(f"  [Path 1 - Web] Searching: '{q}'")
+            logger.info(f"    Searching: '{q}'")
             
             # Build query with options if configured
             query = q
@@ -206,7 +244,7 @@ class CulturalQAWorkflow(Workflow):
 
         # Rerank if enabled
         if self.use_reranker and all_question_snippets and self.reranker:
-            logger.info(f"  Reranking {len(all_question_snippets)} snippets...")
+            logger.info(f"  [Reranking] Selecting best from {len(all_question_snippets)} total snippets...")
             top_k = self.cfg.retrieval.get("reranker_top_k", 3)
             reranked = self.reranker.rerank(
                 query=ev.question,
@@ -218,17 +256,17 @@ class CulturalQAWorkflow(Workflow):
         else:
             context_snippets = all_question_snippets
         
-        logger.info(f"  Final question context length: {len(context_snippets)}")
+        logger.info(f"  Final question context: {len(context_snippets)} snippets")
         
         options_contexts = {}
 
-        # --- Path 2: Option Verification (Use Wikipedia) ---
+        # --- Option Verification (Use Wikipedia) ---
         # Encyclopedia is better at "Entity Definitions"
         # Only query options if use_option_context is enabled
         use_option_ctx = self.cfg.retrieval.get("use_option_context", True)
         
         if use_option_ctx:
-            logger.info(f"  [Path 2] Option Verification Search (use_option_context=True)")
+            logger.info(f"  [Option Verification] Searching for option definitions")
             for opt_key, opt_text in ev.options.items():
                 if self.query_generator.is_generic_option(opt_text):
                     continue
@@ -243,7 +281,7 @@ class CulturalQAWorkflow(Workflow):
 
                 logger.debug(f"    [{opt_key}] Search result: ''{search_result[:200]}''")
         else:
-            logger.info(f"  [Path 2] Skipping option queries (use_option_context=False)")
+            logger.info(f"  [Option Verification] Skipping (use_option_context=False)")
 
         
         return SearchEvent(

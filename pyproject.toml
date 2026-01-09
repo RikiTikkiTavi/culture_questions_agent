@@ -30,6 +30,10 @@ llama-index-tools-wikipedia = "^0.4.1"
 llama-index-tools-google = "^0.6.2"
 llama-index-tools-duckduckgo = "^0.4.1"
 ddgs = "^9.10.0"
+# NEW: Dependencies for SOTA RAG features
+sentence-transformers = "^3.0.0"  # For semantic splitting and reranking
+faiss-cpu = "^1.9.0"  # Optional: for efficient similarity search (use faiss-gpu on H100)
+# faiss-gpu = "^1.9.0"  # Uncomment for GPU-accelerated FAISS
 
 [build-system]
 requires = ["poetry-core>=1.0.0"]
