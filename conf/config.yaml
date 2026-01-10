@@ -17,8 +17,9 @@ vector_store:
   embedding_model_name: "BAAI/bge-m3"
   persist_dir: "/data/horse/ws/s4610340-culture_agent/culture_questions_agent/storage"
   
-  # Wikivoyage configuration (NEW)
-  use_wikivoyage: true  # Set to true to include Wikivoyage data in the index
+  # Data source configuration (NEW)
+  use_wikipedia: true  # Set to false to skip Wikipedia loading (e.g., if index already exists)
+  use_wikivoyage: true  # Set to false to skip Wikivoyage loading (e.g., if index already exists)
   wikivoyage_xml_path: /data/horse/ws/s4610340-culture_agent/culture_questions_agent/data/wiki/datasets/wikivoyage.xml
   wikivoyage_num_workers: 5  # Number of parallel workers for Wikivoyage parsing (null = CPU count - 1)
   
@@ -39,19 +40,6 @@ vector_store:
     - "UK"
     - "United States"
     - "US"
-  #   - "Jordan"
-  #   # Sub-Saharan Africa
-  #   - "South Africa"
-  #   - "Nigeria"
-  #   - "Ethiopia"
-  #   - "Kenya"
-  #   - "Ghana"
-  
-  # Topic templates (optional override)
-  # topic_templates:
-  #   - "Culture of {}"
-  #   - "Cuisine of {}"
-  #   - "Music of {}"
   topic_templates:
     - "Culture of {}"
     - "Public holidays in {}"
@@ -147,10 +135,20 @@ vector_store:
   # Reranker-aligned settings (when chunking_strategy = "reranker_aligned")
   target_tokens: 900   # Target chunk size for reranker
   max_tokens: 1200     # Maximum chunk size
+  
+  # Training data index (NEW)
+  use_training_index: true  # Build and include training data index
+  training_mcq_path: "data/train_dataset_mcq.csv"
+  training_saq_path: "data/train_dataset_saq.csv"
+  training_persist_dir: "/data/horse/ws/s4610340-culture_agent/culture_questions_agent/storage_training"
 
 retrieval:
   # Device configuration (H100 GPUs available)
   device: "cuda"
+  
+  # Training data retrieval (NEW)
+  use_training_retrieval: true  # Enable retrieval from training data index during inference
+  training_top_k: 4  # Number of results from training data retrieval
   
   # Multi-retriever configuration
   use_colbert: true    # Late-interaction retrieval (PRIMARY)
@@ -161,13 +159,13 @@ retrieval:
   
   # ColBERT settings (late-interaction retrieval)
   colbert_model: "colbert-ir/colbertv2.0"  # ColBERT v2
-  colbert_top_k: 50  # Number of results from ColBERT
+  colbert_top_k: 5  # Number of results from ColBERT
   
   # Dense retrieval settings (BGE-M3)
-  hybrid_dense_top_k: 50  # Number of results from dense retrieval
+  hybrid_dense_top_k: 10  # Number of results from dense retrieval
   
   # Sparse retrieval settings (BM25)
-  hybrid_sparse_top_k: 50  # Number of results from BM25
+  hybrid_sparse_top_k: 10  # Number of results from BM25
   
   # Reranking settings (cross-encoder)
   reranker_top_k: 5  # Final number of results after reranking
@@ -200,3 +198,7 @@ evaluation:
 mlflow:
   tracking_uri: "sqlite:///tracking/mlruns.sqlite"
   artifact_location: "tracking/artifacts"
+
+# Inference/Competition submission paths
+test_mcq_path: "data/test_dataset_mcq.csv"
+submission_output_path: "data/mcq_prediction.tsv"

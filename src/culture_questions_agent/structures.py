@@ -4,14 +4,13 @@ from pydantic import BaseModel
 
 @dataclass
 class MCQQuestion:
+    msq_id: str
     question: str
     options: dict[str, str]
 
 
 @dataclass
-class MCQQuestionTrain:
-    question: str
-    options: dict[str, str]
+class MCQQuestionTrain(MCQQuestion):
     countries: dict[str, str]
     answer: str
 
@@ -22,4 +21,4 @@ class SAQQuestion:
 @dataclass
 class SAQQuestionTrain:
     question: str
-    answer: str
+    answers: list[str]

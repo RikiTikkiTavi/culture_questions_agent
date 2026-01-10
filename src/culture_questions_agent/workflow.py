@@ -109,21 +109,41 @@ class CulturalQAWorkflow(Workflow):
             ddgs_backend=cfg.retrieval.get("ddgs_backend", "yandex,yahoo,wikipedia,grokipedia")
         )
         
-        # [4] Initialize SOTA Multi-Retriever (ColBERT + Dense + Sparse + Web)
+        # [4] Initialize SOTA Multi-Retriever (ColBERT + Dense + Sparse + Training + Web)
         # Reranking is disabled here - done once after combining all documents
         use_retrieval = cfg.retrieval.get("use_hybrid_retrieval", True)
         self.use_web = cfg.retrieval.get("use_web", False)
+        use_training = cfg.retrieval.get("use_training_retrieval", False)
+        
         if use_retrieval:
-            logger.info(f"[4/5] Initializing SOTA Multi-Retriever (ColBERT + Dense + Sparse + Web)")
+            logger.info(f"[4/5] Initializing SOTA Multi-Retriever (ColBERT + Dense + Sparse + Training + Web)")
             logger.info(f"  Reranking disabled in orchestrator (will rerank combined results)")
+            logger.info(f"  Training data retrieval: {use_training}")
             try:
                 self.retriever = MultiRetrieverOrchestrator.from_persist_dir(
                     persist_dir=cfg.vector_store.persist_dir,
                     embedding_model_name=cfg.vector_store.embedding_model_name,
                     cache_dir=cfg.model.cache_dir,
                     device=cfg.retrieval.get("device", "cuda"),
+                    # Runtime behavior flags from config.yaml
                     use_reranker=False,  # Disable reranking in orchestrator
-                    use_web=self.use_web,  # Enable web search in orchestrator
+                    use_web=self.use_web,
+                    use_training=use_training,
+                    use_colbert=cfg.retrieval.get("use_colbert", True),
+                    use_dense=cfg.retrieval.get("use_dense", True),
+                    use_sparse=cfg.retrieval.get("use_sparse", True),
+                    # Paths from config.yaml
+                    training_persist_dir=cfg.vector_store.get("training_persist_dir"),
+                    # Model names from config.yaml
+                    colbert_model=cfg.retrieval.get("colbert_model", "colbert-ir/colbertv2.0"),
+                    reranker_model=cfg.model.get("reranker_name", "BAAI/bge-reranker-v2-m3"),
+                    # Top-k values from config.yaml
+                    dense_top_k=cfg.retrieval.get("hybrid_dense_top_k", 50),
+                    sparse_top_k=cfg.retrieval.get("hybrid_sparse_top_k", 50),
+                    colbert_top_k=cfg.retrieval.get("colbert_top_k", 50),
+                    training_top_k=cfg.retrieval.get("training_top_k", 10),
+                    reranker_top_k=cfg.retrieval.get("reranker_top_k", 10),
+                    # Web search engine
                     search_engine=self.search_engine if self.use_web else None,
                 )
             except FileNotFoundError as e:

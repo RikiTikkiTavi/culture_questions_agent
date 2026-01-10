@@ -253,3 +253,31 @@ class MetadataExtractor:
             page_title=page_title,
             source_reliability="high",
         )
+    
+    def extract_metadata_from_text(
+        self,
+        text: str,
+    ) -> CulturalMetadata:
+        """
+        Extract metadata from raw text (e.g., training questions).
+        
+        Args:
+            text: Text content to analyze
+            
+        Returns:
+            CulturalMetadata object
+        """
+        # Try to extract country using title extraction method
+        # (looks for patterns like "in Country" or "of Country")
+        country = self.extract_country_from_title(text)
+        
+        # Extract culture domain from text
+        culture_domain = self.extract_culture_domain(text, "")
+        
+        return CulturalMetadata(
+            country=country,
+            culture_domain=culture_domain,
+            source="training_data",
+            document_type="qa_pair",
+            source_reliability="high",
+        )

@@ -12,7 +12,7 @@ from omegaconf import DictConfig, OmegaConf
 
 from culture_questions_agent.utils import flatten
 from culture_questions_agent.workflow import CulturalQAWorkflow
-from culture_questions_agent.data import read_mcq_data, read_mcq_data_train
+from culture_questions_agent.data import read_mcq_data_train
 from culture_questions_agent.structures import MCQQuestionTrain, MCQQuestion
 
 from mlflow.genai import scorer
@@ -23,6 +23,7 @@ def build_predict_fn(wf: CulturalQAWorkflow):
     async def predict_fn(question: str, options: dict[str, str]) -> str:
         """Predict function for MLflow evaluation."""
         mcq_question = MCQQuestion(
+            msq_id="",
             question=question,
             options=options,
         )

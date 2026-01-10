@@ -29,6 +29,10 @@ from llama_index.embeddings.huggingface import HuggingFaceEmbedding
 from llama_index.readers.wikipedia import WikipediaReader
 from tqdm import tqdm
 
+from culture_questions_agent.data import (
+    read_mcq_data_train,
+    read_saq_data_train,
+)
 from culture_questions_agent.section_parser import (
     WikipediaSectionParser,
     WikivoyageSectionParser,
@@ -470,6 +474,95 @@ def load_wikivoyage_sections(
     return all_documents
 
 
+def load_training_data_as_documents(
+    cfg,
+    metadata_extractor: MetadataExtractor,
+) -> List[Document]:
+    """
+    Load training MCQ and SAQ data and convert to Documents.
+    
+    Args:
+        cfg: Hydra configuration
+        metadata_extractor: Metadata extraction utility
+        
+    Returns:
+        List of Document objects with training Q&A metadata
+    """
+    logger.info("="*80)
+    logger.info("[Training Data] Loading MCQ and SAQ Training Data")
+    logger.info("="*80)
+    
+    documents = []
+    
+    # Load MCQ training data
+    mcq_path = Path(cfg.vector_store.training_mcq_path)
+    if mcq_path.exists():
+        logger.info(f"Loading MCQ training data from {mcq_path}...")
+        mcq_questions = read_mcq_data_train(mcq_path)
+        
+        for q in mcq_questions:
+            # Format with only the question (no options), with answer
+            text = f"Question: {q.question}\nAnswer: {q.options[q.answer]}"
+            
+            # Extract metadata from question
+            metadata = metadata_extractor.extract_metadata_from_text(text)
+            
+            # Add training-specific metadata
+            metadata_dict = metadata.to_dict()
+            metadata_dict.update({
+                "source_type": "training_mcq",
+                "msq_id": q.msq_id,
+                "question_type": "multiple_choice",
+                "has_answer": True,
+            })
+            
+            # Add country information if available
+            if q.countries:
+                countries_text = ", ".join(q.countries.values())
+                metadata_dict["training_countries"] = countries_text
+            
+            doc = Document(text=text, metadata=metadata_dict)
+            documents.append(doc)
+        
+        logger.info(f"  ✓ Loaded {len(mcq_questions)} MCQ training questions")
+    else:
+        logger.warning(f"  MCQ training file not found: {mcq_path}")
+    
+    # Load SAQ training data
+    saq_path = Path(cfg.vector_store.training_saq_path)
+    if saq_path.exists():
+        logger.info(f"Loading SAQ training data from {saq_path}...")
+        saq_questions = read_saq_data_train(saq_path)
+        
+        for q in saq_questions:
+            text = f"Question: {q.question}\n\n Valid answers: {', '.join(q.answers)}"
+            
+            # Extract metadata from question/answer
+            metadata = metadata_extractor.extract_metadata_from_text(text)
+            
+            # Add training-specific metadata
+            metadata_dict = metadata.to_dict()
+            metadata_dict.update({
+                "source_type": "training_saq",
+                "question_type": "short_answer",
+                "has_answer": True,
+            })
+            
+            doc = Document(text=text, metadata=metadata_dict)
+            documents.append(doc)
+        
+        logger.info(f"  ✓ Loaded {len(saq_questions)} SAQ training questions")
+    else:
+        logger.warning(f"  SAQ training file not found: {saq_path}")
+    
+    logger.info("="*80)
+    logger.info(f"✓ Training Data Loading Complete")
+    logger.info(f"  Total training documents: {len(documents)}")
+    logger.info("="*80)
+    
+    return documents
+
+
 def build_atlas(cfg) -> Tuple[VectorStoreIndex, MultiRetrieverOrchestrator]:
     """
     Build a SOTA VectorStoreIndex with multi-granularity semantic chunking,
@@ -517,9 +610,24 @@ def build_atlas(cfg) -> Tuple[VectorStoreIndex, MultiRetrieverOrchestrator]:
     logger.info(f"\n[3/7] Loading Documents (Section-Aware)")
     all_documents = []
     
-    # Load Wikipedia sections
-    wiki_docs, extraction_report = load_wikipedia_sections(cfg, metadata_extractor)
-    all_documents.extend(wiki_docs)
+    # Load Wikipedia sections (if enabled)
+    use_wikipedia = cfg.vector_store.get('use_wikipedia', True)
+    extraction_report = {}
+    
+    if use_wikipedia:
+        wiki_docs, extraction_report = load_wikipedia_sections(cfg, metadata_extractor)
+        all_documents.extend(wiki_docs)
+    else:
+        logger.info("\n[Wikipedia] Skipped (use_wikipedia=False)")
+        extraction_report = {
+            "total_topics": 0,
+            "successful": 0,
+            "failed": 0,
+            "sections_extracted": 0,
+            "documents_created": 0,
+            "successful_pages": [],
+            "failed_pages": [],
+        }
     
     # Load Wikivoyage sections (if enabled)
     use_wikivoyage = cfg.vector_store.get('use_wikivoyage', False)
@@ -546,20 +654,30 @@ def build_atlas(cfg) -> Tuple[VectorStoreIndex, MultiRetrieverOrchestrator]:
     else:
         logger.info("\n[Wikivoyage] Skipped (use_wikivoyage=False)")
     
-    if not all_documents:
-        raise ValueError("No documents were successfully loaded!")
+    # Check if we have documents OR if we're building training index only
+    use_training_index = cfg.vector_store.get('use_training_index', False)
     
-    logger.info(f"\n✓ Total documents loaded: {len(all_documents)}")
+    if not all_documents and not use_training_index:
+        raise ValueError("No documents were successfully loaded! Enable use_wikipedia, use_wikivoyage, or use_training_index.")
+    
+    if all_documents:
+        logger.info(f"\n✓ Total documents loaded: {len(all_documents)}")
+    else:
+        logger.info(f"\n⊗ No Wikipedia/Wikivoyage documents (building training index only)")
     
     # [4] Apply multi-granularity semantic chunking
     logger.info(f"\n[4/7] Multi-Granularity Semantic Chunking")
     
+    # Get chunking strategy (needed for training index too)
     chunking_strategy = cfg.vector_store.get('chunking_strategy', 'multi_granularity')
+    granularities = cfg.vector_store.get('granularities', ['small', 'medium', 'large'])
     
-    if chunking_strategy == 'multi_granularity':
+    # Skip chunking if no documents (training-only mode)
+    if not all_documents:
+        logger.info("  Skipped (no Wikipedia/Wikivoyage documents)")
+        nodes = []
+    elif chunking_strategy == 'multi_granularity':
         logger.info("  Strategy: Multi-Granularity Semantic Chunking")
-        
-        granularities = cfg.vector_store.get('granularities', ['small', 'medium', 'large'])
         
         chunker = MultiGranularitySemanticChunker(
             embedding_model_name=cfg.vector_store.embedding_model_name,
@@ -585,26 +703,32 @@ def build_atlas(cfg) -> Tuple[VectorStoreIndex, MultiRetrieverOrchestrator]:
     else:
         raise ValueError(f"Unknown chunking strategy: {chunking_strategy}")
     
-    logger.info(f"  ✓ Created {len(nodes)} chunks")
+    if all_documents:
+        logger.info(f"  ✓ Created {len(nodes)} chunks")
     
     # [5] Build vector index with batch embeddings
     logger.info(f"\n[5/7] Building Vector Index (Batch Embeddings)")
     
-    # Cast nodes to BaseNode list for type compatibility
-    base_nodes = cast(List[BaseNode], nodes)
-    
-    # Configure batch size for embeddings (if supported by embed_model)
-    batch_size = cfg.vector_store.get('embed_batch_size', 128)
-    logger.info(f"  Recommended batch size: {batch_size}")
-    logger.info(f"  Note: LlamaIndex will batch embeddings automatically during indexing")
-    
-    index = VectorStoreIndex(
-        nodes=base_nodes,
-        embed_model=embed_model,
-        show_progress=True,
-    )
-    
-    logger.info(f"  ✓ Vector index built ({len(nodes)} nodes)")
+    # Skip index building if no nodes (training-only mode)
+    if not nodes:
+        logger.info("  Skipped (no Wikipedia/Wikivoyage nodes)")
+        index = None
+    else:
+        # Cast nodes to BaseNode list for type compatibility
+        base_nodes = cast(List[BaseNode], nodes)
+        
+        # Configure batch size for embeddings (if supported by embed_model)
+        batch_size = cfg.vector_store.get('embed_batch_size', 128)
+        logger.info(f"  Recommended batch size: {batch_size}")
+        logger.info(f"  Note: LlamaIndex will batch embeddings automatically during indexing")
+        
+        index = VectorStoreIndex(
+            nodes=base_nodes,
+            embed_model=embed_model,
+            show_progress=True,
+        )
+        
+        logger.info(f"  ✓ Vector index built ({len(nodes)} nodes)")
     
     # [6] Persist index
     persist_dir = Path(cfg.vector_store.persist_dir)
@@ -613,82 +737,138 @@ def build_atlas(cfg) -> Tuple[VectorStoreIndex, MultiRetrieverOrchestrator]:
     logger.info(f"\n[6/7] Persisting Index")
     logger.info(f"  Directory: {persist_dir}")
     
-    index.storage_context.persist(persist_dir=str(persist_dir))
+    # Only persist if index was built
+    if index is not None:
+        index.storage_context.persist(persist_dir=str(persist_dir))
+        logger.info(f"  ✓ Index persisted")
+    else:
+        logger.info(f"  ⊗ Skipped (no index to persist)")
     
     # Save extraction report
     report_path = persist_dir / "wikipedia_extraction_report.json"
     with open(report_path, 'w') as f:
         json.dump(extraction_report, f, indent=2)
     
-    logger.info(f"  ✓ Index persisted")
     logger.info(f"  ✓ Extraction report saved: {report_path}")
     
     # [7] Initialize multi-retriever orchestrator
     logger.info(f"\n[7/7] Initializing Multi-Retriever Orchestrator")
     
-    use_colbert = cfg.retrieval.get('use_colbert', True)
-    use_dense = cfg.retrieval.get('use_dense', True)
-    use_sparse = cfg.retrieval.get('use_sparse', True)
-    use_reranker = cfg.retrieval.get('use_reranker', True)
-    
-    # Initialize ColBERT if enabled
-    colbert_retriever = None
-    if use_colbert:
-        colbert_index_path = persist_dir / "colbert_index.pkl"
+    # Skip orchestrator if no index (training-only mode)
+    if index is None:
+        logger.info("  Skipped (no main index, training-only mode)")
+        orchestrator = None
+    else:
+        use_colbert = cfg.retrieval.get('use_colbert', True)
+        use_dense = cfg.retrieval.get('use_dense', True)
+        use_sparse = cfg.retrieval.get('use_sparse', True)
+        use_reranker = cfg.retrieval.get('use_reranker', True)
         
-        logger.info("  Building ColBERT retriever (this may take time on H100)...")
-        colbert_retriever = ColBERTRetriever(
-            model_name=cfg.retrieval.get('colbert_model', 'colbert-ir/colbertv2.0'),
+        # Initialize ColBERT if enabled
+        colbert_retriever = None
+        if use_colbert:
+            colbert_index_path = persist_dir / "colbert_index.pkl"
+            
+            logger.info("  Building ColBERT retriever (this may take time on H100)...")
+            colbert_retriever = ColBERTRetriever(
+                model_name=cfg.retrieval.get('colbert_model', 'colbert-ir/colbertv2.0'),
+                nodes=cast(List[BaseNode], nodes),
+                similarity_top_k=cfg.retrieval.get('colbert_top_k', 50),
+                device=cfg.retrieval.get('device', 'cuda'),
+                cache_dir=cfg.vector_store.cache_dir,
+                index_path=str(colbert_index_path),
+            )
+        
+        # Build orchestrator
+        orchestrator = MultiRetrieverOrchestrator(
+            index=index,
             nodes=cast(List[BaseNode], nodes),
-            similarity_top_k=cfg.retrieval.get('colbert_top_k', 50),
-            device=cfg.retrieval.get('device', 'cuda'),
+            colbert_retriever=colbert_retriever,
+            dense_top_k=cfg.retrieval.get('hybrid_dense_top_k', 50),
+            sparse_top_k=cfg.retrieval.get('hybrid_sparse_top_k', 50),
+            colbert_top_k=cfg.retrieval.get('colbert_top_k', 50),
+            reranker_model=cfg.model.get('reranker_name', 'BAAI/bge-reranker-v2-m3'),
+            reranker_top_k=cfg.retrieval.get('reranker_top_k', 10),
             cache_dir=cfg.vector_store.cache_dir,
-            index_path=str(colbert_index_path),
+            use_colbert=use_colbert,
+            use_dense=use_dense,
+            use_sparse=use_sparse,
+            use_reranker=use_reranker,
         )
+        
+        # Save orchestrator stats
+        stats_path = persist_dir / "retriever_stats.json"
+        with open(stats_path, 'w') as f:
+            json.dump(orchestrator.get_retrieval_stats(), f, indent=2)
+        
+        logger.info(f"  ✓ Orchestrator config saved: {config_path}")
+        logger.info(f"  ✓ Retriever stats saved: {stats_path}")
     
-    # Build orchestrator
-    orchestrator = MultiRetrieverOrchestrator(
-        index=index,
-        nodes=cast(List[BaseNode], nodes),
-        colbert_retriever=colbert_retriever,
-        dense_top_k=cfg.retrieval.get('hybrid_dense_top_k', 50),
-        sparse_top_k=cfg.retrieval.get('hybrid_sparse_top_k', 50),
-        colbert_top_k=cfg.retrieval.get('colbert_top_k', 50),
-        reranker_model=cfg.model.get('reranker_name', 'BAAI/bge-reranker-v2-m3'),
-        reranker_top_k=cfg.retrieval.get('reranker_top_k', 10),
-        cache_dir=cfg.vector_store.cache_dir,
-        use_colbert=use_colbert,
-        use_dense=use_dense,
-        use_sparse=use_sparse,
-        use_reranker=use_reranker,
-    )
+    # [8] Optional: Build training data index
+    training_index = None
+    use_training_index = cfg.vector_store.get('use_training_index', False)
     
-    # Save orchestrator configuration for loading in workflow
-    orchestrator_config = {
-        "use_colbert": use_colbert,
-        "use_dense": use_dense,
-        "use_sparse": use_sparse,
-        "use_reranker": use_reranker,
-        "dense_top_k": cfg.retrieval.get('hybrid_dense_top_k', 50),
-        "sparse_top_k": cfg.retrieval.get('hybrid_sparse_top_k', 50),
-        "colbert_top_k": cfg.retrieval.get('colbert_top_k', 50),
-        "reranker_top_k": cfg.retrieval.get('reranker_top_k', 10),
-        "colbert_model": cfg.retrieval.get('colbert_model', 'colbert-ir/colbertv2.0'),
-        "reranker_model": cfg.model.get('reranker_name', 'BAAI/bge-reranker-v2-m3'),
-        "colbert_index_path": str(persist_dir / "colbert_index.pkl") if use_colbert else None,
-    }
-    
-    config_path = persist_dir / "orchestrator_config.json"
-    with open(config_path, 'w') as f:
-        json.dump(orchestrator_config, f, indent=2)
-    
-    # Save orchestrator stats
-    stats_path = persist_dir / "retriever_stats.json"
-    with open(stats_path, 'w') as f:
-        json.dump(orchestrator.get_retrieval_stats(), f, indent=2)
-    
-    logger.info(f"  ✓ Orchestrator config saved: {config_path}")
-    logger.info(f"  ✓ Retriever stats saved: {stats_path}")
+    if use_training_index:
+        logger.info(f"\n[8/8] Building Training Data Index (Optional)")
+        
+        # Load training data
+        training_documents = load_training_data_as_documents(cfg, metadata_extractor)
+        
+        if training_documents:
+            # Skip chunking for training data - keep each question as a separate chunk
+            logger.info("  Creating nodes (1 question = 1 chunk)...")
+            
+            # Convert documents directly to nodes without chunking
+            from llama_index.core.schema import TextNode
+            
+            training_nodes = []
+            for doc in training_documents:
+                node = TextNode(
+                    text=doc.get_content(),
+                    metadata=doc.metadata,
+                )
+                training_nodes.append(node)
+            
+            logger.info(f"  ✓ Created {len(training_nodes)} training nodes (1 per question)")
+            
+            # Build training index
+            logger.info("  Building training vector index...")
+            training_base_nodes = cast(List[BaseNode], training_nodes)
+            training_index = VectorStoreIndex(
+                nodes=training_base_nodes,
+                embed_model=embed_model,
+                show_progress=True,
+            )
+            
+            # Persist training index
+            training_persist_dir = Path(cfg.vector_store.training_persist_dir)
+            training_persist_dir.mkdir(parents=True, exist_ok=True)
+            
+            logger.info(f"  Persisting training index to: {training_persist_dir}")
+            training_index.storage_context.persist(persist_dir=str(training_persist_dir))
+            
+            # Save training index metadata
+            training_metadata = {
+                "total_documents": len(training_documents),
+                "total_nodes": len(training_nodes),
+                "chunking_strategy": "none (1 question = 1 node)",
+                "source_files": {
+                    "mcq": cfg.vector_store.training_mcq_path,
+                    "saq": cfg.vector_store.training_saq_path,
+                }
+            }
+            
+            training_metadata_path = training_persist_dir / "training_index_metadata.json"
+            with open(training_metadata_path, 'w') as f:
+                json.dump(training_metadata, f, indent=2)
+            
+            logger.info(f"  ✓ Training index persisted")
+            logger.info(f"  ✓ Training metadata saved: {training_metadata_path}")
+        else:
+            logger.warning("  No training documents loaded, skipping training index")
+    else:
+        logger.info(f"\n[8/8] Training Data Index: Disabled (use_training_index=False)")
+        # No need to update orchestrator config - training settings come from config.yaml at runtime
     
     logger.info("\n" + "="*80)
     logger.info("✓ SOTA ATLAS BUILT SUCCESSFULLY!")
@@ -696,8 +876,18 @@ def build_atlas(cfg) -> Tuple[VectorStoreIndex, MultiRetrieverOrchestrator]:
     logger.info(f"Wikipedia Pages: {extraction_report['successful']}/{extraction_report['total_topics']}")
     logger.info(f"Sections Extracted: {extraction_report.get('sections_extracted', 'N/A')}")
     logger.info(f"Total Chunks: {len(nodes)}")
-    logger.info(f"Retrievers: ColBERT={use_colbert}, Dense={use_dense}, Sparse={use_sparse}")
-    logger.info(f"Reranker: {use_reranker}")
+    
+    # Only log retriever info if orchestrator was built
+    if orchestrator is not None:
+        logger.info(f"Retrievers: ColBERT={use_colbert}, Dense={use_dense}, Sparse={use_sparse}")
+        logger.info(f"Reranker: {use_reranker}")
+    else:
+        logger.info(f"Retrievers: NONE (training-only mode)")
+    
+    if use_training_index and training_index:
+        logger.info(f"Training Index: ENABLED ({len(training_documents)} docs)")
+    else:
+        logger.info(f"Training Index: DISABLED")
     logger.info("="*80)
     
     return index, orchestrator
