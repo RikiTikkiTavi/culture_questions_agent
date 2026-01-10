@@ -59,12 +59,31 @@ vector_store:
   topic_templates:
     - "Culture of {}"
     - "Public holidays in {}"
+    - "Customs and traditions of {}"
+    - "Daily life in {}"
+    - "Food culture in {}"
     - "Cuisine of {}"
     - "Education in {}"
-    - "Geography of {}"
+    - "Education system in {}"
+    - "School life in {}"
+    - "Youth culture in {}"
+    - "Employment in {}"
+    - "Labor law in {}"
+    - "Pensions in {}"
+    - "Social security in {}"
     - "Economy of {}"
     - "Agriculture in {}"
     - "Demographics of {}"
+    - "Religion in {}"
+    - "Religious practices in {}"
+    - "Sport in {}"
+    - "Sports culture in {}"
+    - "Olympic Games in {}"
+    - "Leisure in {}"
+    - "Media in {}"
+    - "Transport in {}"
+    - "Geography of {}"
+
   
   # Batch processing (NEW)
   embed_batch_size: 128  # Batch size for embedding calculations (GPU memory dependent)
@@ -130,6 +149,10 @@ retrieval:
 
 # Optional: Run test query after building index
 run_test_query: false  # Set to true to validate retrieval system
+
+evaluation:
+  max_questions: null  # Maximum number of questions to evaluate (null = all questions)
+
 
 mlflow:
   tracking_uri: "sqlite:///tracking/mlruns.sqlite"

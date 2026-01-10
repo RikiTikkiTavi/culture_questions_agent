@@ -141,6 +141,10 @@ class WikipediaSectionParser:
         text = re.sub(r'<ref[^>]*>.*?</ref>', '', text, flags=re.DOTALL | re.IGNORECASE)
         text = re.sub(r'<ref[^>]*/>', '', text, flags=re.IGNORECASE)
         
+        # Remove inline CSS/SVG chart data (e.g., .mw-chart-...)
+        # This handles Wikipedia's chart visualizations that appear as inline CSS
+        text = re.sub(r'\.mw-chart-[a-f0-9]+[^{]*\{[^}]*\}', '', text, flags=re.DOTALL)
+        
         # Remove HTML tags (keep text content)
         text = re.sub(r'<[^>]+>', '', text)
         

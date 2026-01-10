@@ -145,7 +145,10 @@ def main(cfg: DictConfig) -> None:
         verbose=True
     )
     
-    mcq_questions = read_mcq_data_train(Path("data/train_dataset_mcq.csv"))
+    # Load questions with optional limit from config
+    all_questions = read_mcq_data_train(Path("data/train_dataset_mcq.csv"))
+    max_questions = cfg.get("evaluation", {}).get("max_questions", None)
+    mcq_questions = all_questions[:max_questions] if max_questions else all_questions
 
     # print set of countries
     countries = set()

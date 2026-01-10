@@ -156,6 +156,7 @@ class MultiRetrieverOrchestrator:
         embedding_model_name: str = "BAAI/bge-m3",
         cache_dir: Optional[str] = None,
         device: str = "cuda",
+        use_reranker: bool = True,
     ) -> "MultiRetrieverOrchestrator":
         """
         Load orchestrator from persisted directory.
@@ -165,6 +166,7 @@ class MultiRetrieverOrchestrator:
             embedding_model_name: Name of embedding model to use
             cache_dir: Cache directory for models
             device: Device for ColBERT ('cuda' or 'cpu')
+            use_reranker: Enable cross-encoder reranking
             
         Returns:
             Initialized MultiRetrieverOrchestrator
@@ -243,7 +245,7 @@ class MultiRetrieverOrchestrator:
             use_colbert=config.get('use_colbert', True),
             use_dense=config.get('use_dense', True),
             use_sparse=config.get('use_sparse', True),
-            use_reranker=config.get('use_reranker', True),
+            use_reranker=use_reranker,  # Use parameter instead of config
         )
     
     def retrieve(
@@ -328,6 +330,11 @@ class MultiRetrieverOrchestrator:
                 unique_results,
                 query_str=query,
             )
+            
+            # Convert numpy float32 scores to Python float to avoid Pydantic warnings
+            for node_with_score in reranked_results:
+                if node_with_score.score is not None:
+                    node_with_score.score = float(node_with_score.score)
             
             logger.info(f"  ✓ Reranked → {len(reranked_results)} final results")
             
