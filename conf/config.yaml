@@ -14,6 +14,8 @@ vector_store:
   wikivoyage_xml_path: /data/horse/ws/s4610340-culture_agent/culture_questions_agent/data/wiki/datasets/wikivoyage.xml
   chunk_size: 512
   chunk_overlap: 50
+  # Additional Wikipedia pages to include beyond country-based templates
+  additional_wikipedia_pages: []  # e.g., ["Traditional Chinese medicine", "Hofstede's cultural dimensions theory"]
 
 retrieval:
   # Query generation

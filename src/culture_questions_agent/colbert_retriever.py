@@ -317,9 +317,9 @@ class ColBERTRetriever(BaseRetriever):
         """
         query = query_bundle.query_str
         
-        logger.info(f"ColBERT retrieval for: '{query}'")
-        logger.info(f"  doc_embeddings count: {len(self.doc_embeddings)}")
-        logger.info(f"  nodes count: {len(self.nodes)}")
+        logger.debug(f"ColBERT retrieval for: '{query}'")
+        logger.debug(f"  doc_embeddings count: {len(self.doc_embeddings)}")
+        logger.debug(f"  nodes count: {len(self.nodes)}")
         
         if not self.doc_embeddings:
             logger.warning("  WARNING: No doc_embeddings available! Returning empty results.")
@@ -327,7 +327,7 @@ class ColBERTRetriever(BaseRetriever):
         
         # Encode query
         query_embeddings = self._encode_query(query)
-        logger.info(f"  Query embeddings shape: {query_embeddings.shape}")
+        logger.debug(f"  Query embeddings shape: {query_embeddings.shape}")
         
         # Score all documents
         scores = []
@@ -344,8 +344,8 @@ class ColBERTRetriever(BaseRetriever):
         
         # Build NodeWithScore objects
         node_dict = {node.node_id: node for node in self.nodes}
-        logger.info(f"  node_dict size: {len(node_dict)}")
-        logger.info(f"  top_k candidates: {len(top_k)}")
+        logger.debug(f"  node_dict size: {len(node_dict)}")
+        logger.debug(f"  top_k candidates: {len(top_k)}")
         
         results = []
         matched = 0
@@ -366,10 +366,10 @@ class ColBERTRetriever(BaseRetriever):
         if unmatched > 0:
             logger.warning(f"  Total unmatched node_ids: {unmatched}/{len(top_k)}")
         
-        logger.info(f"  ✓ Retrieved {len(results)} results (matched: {matched}, unmatched: {unmatched})")
+        logger.debug(f"  ✓ Retrieved {len(results)} results (matched: {matched}, unmatched: {unmatched})")
         if results:
-            logger.info(f"    Top score: {results[0].score:.4f}")
-            logger.info(f"    Bottom score: {results[-1].score:.4f}")
+            logger.debug(f"    Top score: {results[0].score:.4f}")
+            logger.debug(f"    Bottom score: {results[-1].score:.4f}")
         
         return results
     

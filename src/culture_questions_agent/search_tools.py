@@ -84,7 +84,7 @@ class SearchEngine:
             logger.warning("DDGS not initialized")
             return ""
         
-        logger.info(f"DDGS web search: '{query}'")
+        logger.debug(f"DDGS web search: '{query}'")
         
         try:
             # Use text search from ddgs
@@ -107,15 +107,15 @@ class SearchEngine:
                         
                 if cleaned_snippets:
                     if return_list:
-                        logger.info(f"✓ DDGS found {len(cleaned_snippets)} snippets")
+                        logger.debug(f"✓ DDGS found {len(cleaned_snippets)} snippets")
                         return cleaned_snippets
                     else:
                         combined_text = "\n---\n".join(cleaned_snippets)
-                        logger.info(f"✓ DDGS found {len(cleaned_snippets)} snippets")
+                        logger.debug(f"✓ DDGS found {len(cleaned_snippets)} snippets")
                         return combined_text[:self.max_chars]
                     
         except Exception as e:
-            logger.info(f"DDGS search failed: {e}")
+            logger.debug(f"DDGS search failed: {e}")
         
         return [] if return_list else ""
     
@@ -130,7 +130,7 @@ class SearchEngine:
         Returns:
             Search results as text
         """
-        logger.info(f"Searching for: '{query}'")
+        logger.debug(f"Searching for: '{query}'")
         
         # Try Wikipedia first
         wiki_result = self.search_wikipedia(query)
@@ -138,7 +138,7 @@ class SearchEngine:
             return wiki_result
         
         # Fallback to DDGS web search
-        logger.info("Falling back to DDGS web search...")
+        logger.debug("Falling back to DDGS web search...")
         return self.search_web(query, max_results, return_list=False)  # type: ignore
     
     def search_option_with_context(

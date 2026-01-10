@@ -1,7 +1,6 @@
 """Cultural QA Workflow using LLM-based Query Generation, Wikipedia/DuckDuckGo Search, and NLL-based prediction."""
 import logging
 import os
-import time
 from typing import Dict
 
 import mlflow
@@ -28,23 +27,6 @@ class QueryGenerationEvent(Event):
     question: str
     question_queries: list[str]  # Queries for question context
     options: Dict[str, str]
-
-
-class LocalRetrievalEvent(Event):
-    """Event carrying local retrieval results."""
-    question: str
-    question_queries: list[str]
-    options: Dict[str, str]
-    local_documents: list[str]  # Documents from local index
-
-
-class WebSearchEvent(Event):
-    """Event carrying web search results."""
-    question: str
-    question_queries: list[str]
-    options: Dict[str, str]
-    local_documents: list[str]
-    web_documents: list[str]  # Documents from web search
 
 
 class CombinedRetrievalEvent(Event):
@@ -110,11 +92,11 @@ class CulturalQAWorkflow(Workflow):
             ddgs_backend=cfg.retrieval.get("ddgs_backend", "yandex,yahoo,wikipedia,grokipedia")
         )
         
-        # [4] Initialize SOTA Multi-Retriever (ColBERT + Dense + Sparse)
+        # [4] Initialize SOTA Multi-Retriever (ColBERT + Dense + Sparse + Web)
         # Reranking is disabled here - done once after combining all documents
         use_retrieval = cfg.retrieval.get("use_hybrid_retrieval", True)
         if use_retrieval:
-            logger.info(f"[4/5] Initializing SOTA Multi-Retriever (ColBERT + Dense + Sparse)")
+            logger.info(f"[4/5] Initializing SOTA Multi-Retriever (ColBERT + Dense + Sparse + Web)")
             logger.info(f"  Reranking disabled in orchestrator (will rerank combined results)")
             try:
                 self.retriever = MultiRetrieverOrchestrator.from_persist_dir(
@@ -123,6 +105,8 @@ class CulturalQAWorkflow(Workflow):
                     cache_dir=cfg.model.cache_dir,
                     device=cfg.retrieval.get("device", "cuda"),
                     use_reranker=False,  # Disable reranking in orchestrator
+                    use_web=self.use_web,  # Enable web search in orchestrator
+                    search_engine=self.search_engine if self.use_web else None,
                 )
             except FileNotFoundError as e:
                 logger.warning(f"SOTA retriever initialization failed: {e}")
@@ -135,6 +119,8 @@ class CulturalQAWorkflow(Workflow):
         # [5] Unified reranker for combined results (local + web)
         # Controlled by single use_reranker config option
         self.use_reranker = cfg.retrieval.get("use_reranker", True)
+        self.use_web = cfg.retrieval.get("use_web", False)
+        
         if self.use_reranker:
             logger.info(f"[5/5] Initializing Combined Results Reranker: {cfg.model.get('reranker_name', 'BAAI/bge-reranker-v2-m3')}")
             self.reranker = Reranker(
@@ -144,6 +130,8 @@ class CulturalQAWorkflow(Workflow):
         else:
             logger.info(f"[5/5] Reranker disabled for combined results")
             self.reranker = None
+        
+        logger.info(f"Web search: {'enabled' if self.use_web else 'disabled'}")
         
         logger.info("="*80)
         logger.info("✓ Workflow initialized successfully!")
@@ -194,119 +182,49 @@ class CulturalQAWorkflow(Workflow):
         )
     
     @step
-    async def retrieve_local_documents(self, ev: QueryGenerationEvent) -> LocalRetrievalEvent:
+    async def retrieve_documents(self, ev: QueryGenerationEvent) -> CombinedRetrievalEvent:
         """
-        Retrieve documents from local index using SOTA multi-retriever.
+        Retrieve documents from local index and web using SOTA multi-retriever orchestrator.
         
         Args:
             ev: QueryGenerationEvent with question queries
             
         Returns:
-            LocalRetrievalEvent with local retrieval results
+            CombinedRetrievalEvent with retrieved and combined results
         """
-        logger.info(f"📚 [Step 1/4] Local Document Retrieval")
+        logger.info(f"📚 [Step 1/3] Multi-Source Document Retrieval (Local + Web)")
         
-        local_docs = []
+        all_docs = []
         
         if self.retriever:
-            logger.info(f"  SOTA Multi-Retrieval (ColBERT + Dense + Sparse) from local documents")
+            logger.info(f"  SOTA Multi-Retrieval (ColBERT + Dense + Sparse + Web) with orchestration")
             
-            # Retrieve from local documents using SOTA multi-retriever
+            # Check if we should include options in web query
+            include_options = self.cfg.retrieval.get("include_options_in_query", True)
+            
+            # Retrieve from all sources using orchestrator
             # retrieve_texts_batch returns list of text strings from top nodes
-            local_docs = self.retriever.retrieve_texts_batch(ev.question_queries)
-            
-            if local_docs:
-                logger.info(f"  ✓ Retrieved {len(local_docs)} documents from local index")
-            else:
-                logger.info(f"  No results from local index")
-        else:
-            logger.info(f"  Hybrid retrieval disabled or unavailable")
-        
-        return LocalRetrievalEvent(
-            question=ev.question,
-            question_queries=ev.question_queries,
-            options=ev.options,
-            local_documents=local_docs
-        )
-    
-    @step
-    async def search_web(self, ev: LocalRetrievalEvent) -> WebSearchEvent:
-        """
-        Execute web search using DDGS for current information.
-        
-        Args:
-            ev: LocalRetrievalEvent with local documents
-            
-        Returns:
-            WebSearchEvent with web search results
-        """
-        logger.info(f"🌐 [Step 2/4] Web Search (DDGS)")
-        
-        web_docs = []
-        include_options = self.cfg.retrieval.get("include_options_in_query", True)
-        
-        for q in ev.question_queries:
-            logger.info(f"  Searching: '{q}'")
-            
-            # Build query with options if configured
-            query = q
-            if include_options:
-                query = q + " " + " ".join(ev.options.values())
-            
-            # Always get search results as list to avoid concatenating multiple snippets
-            # into a single document (which would cause \n---\n separators in reranked contexts)
-            search_results = self.search_engine.search_web(
-                query, 
-                max_results=self.cfg.retrieval.get("max_web_search_results", 5),
-                return_list=True
+            all_docs = self.retriever.retrieve_texts_batch(
+                ev.question_queries,
+                include_options_in_web_query=include_options,
+                options=ev.options if include_options else None
             )
-            if search_results:
-                web_docs.extend(search_results)
-
-            time.sleep(3.0)  # To avoid rate limiting
-        
-        logger.info(f"  ✓ Retrieved {len(web_docs)} documents from web search")
-        
-        return WebSearchEvent(
-            question=ev.question,
-            question_queries=ev.question_queries,
-            options=ev.options,
-            local_documents=ev.local_documents,
-            web_documents=web_docs
-        )
-    
-    @step
-    async def combine_and_rerank(self, ev: WebSearchEvent) -> CombinedRetrievalEvent:
-        """
-        Combine local and web results, deduplicate, and optionally rerank.
-        
-        Args:
-            ev: WebSearchEvent with both local and web documents
             
-        Returns:
-            CombinedRetrievalEvent with final combined context
-        """
-        logger.info(f"🔄 [Step 3/4] Combining & Reranking Results")
+            if all_docs:
+                logger.info(f"  ✓ Retrieved {len(all_docs)} documents from all sources")
+            else:
+                logger.info(f"  No results from retrieval")
+        else:
+            logger.info(f"  Multi-retrieval disabled or unavailable")
         
-        # Combine all snippets
-        all_snippets = ev.local_documents + ev.web_documents
-        
-        # Deduplicate
-        if all_snippets:
-            original_count = len(all_snippets)
-            all_snippets = list(set(all_snippets))
-            
-            if original_count > len(all_snippets):
-                logger.info(f"  Deduplicated: {original_count} → {len(all_snippets)} snippets")
-        
-        # Rerank if enabled, otherwise limit to top_k
+        # Rerank if enabled
         top_k = self.cfg.retrieval.get("reranker_top_k", 5)
         
-        if self.use_reranker and all_snippets and self.reranker:
-            logger.info(f"  Reranking: Selecting top {top_k} from {len(all_snippets)} total snippets...")
+        if self.use_reranker and all_docs and self.reranker:
+            logger.info(f"  Reranking: Selecting top {top_k} from {len(all_docs)} total snippets...")
             reranked = self.reranker.rerank(
                 query=ev.question,
-                documents=all_snippets,
+                documents=all_docs,
                 top_k=top_k
             )
             # Extract just the documents from reranked results
@@ -314,7 +232,7 @@ class CulturalQAWorkflow(Workflow):
             logger.info(f"  ✓ Selected top {len(context_snippets)} snippets after reranking")
         else:
             # Even without reranking, limit to top_k to avoid context overflow
-            context_snippets = all_snippets[:top_k]
+            context_snippets = all_docs[:top_k]
             logger.info(f"  ✓ Limited to top {len(context_snippets)} snippets (no reranking)")
         
         return CombinedRetrievalEvent(
@@ -334,7 +252,7 @@ class CulturalQAWorkflow(Workflow):
         Returns:
             SearchEvent with complete search results
         """
-        logger.info(f"✅ [Step 4/4] Option Verification")
+        logger.info(f"✅ [Step 2/3] Option Verification")
         
         options_contexts = {}
         use_option_ctx = self.cfg.retrieval.get("use_option_context", True)
@@ -377,7 +295,7 @@ class CulturalQAWorkflow(Workflow):
         Returns:
             StopEvent with the final answer
         """
-        logger.info(f"🎯 Predicting answer using NLL with dual-path evidence...")
+        logger.info(f"🎯 [Step 3/3] Predicting answer using NLL with dual-path evidence...")
         
         # Get config flags for context enrichment
         use_question_ctx = self.cfg.retrieval.get("use_question_context", True)
@@ -391,7 +309,7 @@ class CulturalQAWorkflow(Workflow):
         question_ctx = ev.question_context if use_question_ctx else [""]
 
         # Predict using NLL
-        best_option, losses = self.nll_predictor.predict_best_option(
+        best_option, scores = self.nll_predictor.predict_best_option(
             question=ev.question,
             options=ev.options,
             option_contexts=ev.option_contexts,

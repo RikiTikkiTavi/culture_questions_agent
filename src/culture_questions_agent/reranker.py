@@ -54,7 +54,7 @@ class Reranker:
         if not documents:
             return []
         
-        logger.info(f"Reranking {len(documents)} documents, selecting top {top_k}")
+        logger.debug(f"Reranking {len(documents)} documents, selecting top {top_k}")
         
         # Prepare pairs for reranking
         pairs = [[query, doc] for doc in documents]
@@ -80,8 +80,8 @@ class Reranker:
         # Return top-k
         top_docs = scored_docs[:top_k]
         
-        logger.info(f"✓ Selected top {len(top_docs)} documents")
+        logger.debug(f"✓ Selected top {len(top_docs)} documents")
         for i, (orig_idx, doc, score) in enumerate(top_docs):
-            logger.info(f"  {i+1}. Score: {score:.4f} - {doc[:500]}...")
+            logger.debug(f"  {i+1}. Score: {score:.4f} - {doc[:500]}...")
         
         return top_docs

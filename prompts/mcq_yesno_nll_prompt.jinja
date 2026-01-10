@@ -1,0 +1,16 @@
+{% if context_parts %}
+Context:
+{% for part in context_parts %}
+{{ part }}
+{% endfor %}
+
+{% endif %}
+Question: {{ question }}
+Options:
+{% for key, value in options.items() %}
+{{ key }}. {{ value }}
+{% endfor %}
+
+Proposed answer: {{ proposed_answer_key }} - {{ options[proposed_answer_key] }}.
+Is this the correct answer? Yes or No.
+Answer:

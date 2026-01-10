@@ -152,7 +152,13 @@ def load_wikipedia_sections(
         for template in templates:
             topics.append(template.format(country))
     
-    logger.info(f"  ✓ Generated {len(topics)} topics ({len(templates)} templates × {len(countries)} countries)")
+    # Add any additional Wikipedia pages from config
+    additional_pages = cfg.vector_store.get('additional_wikipedia_pages', [])
+    if additional_pages:
+        topics.extend(additional_pages)
+        logger.info(f"  ✓ Added {len(additional_pages)} additional Wikipedia pages")
+    
+    logger.info(f"  ✓ Generated {len(topics)} total topics ({len(templates)} templates × {len(countries)} countries + {len(additional_pages)} additional pages)")
     
     # Try to load from cache
     cached_pages = {}

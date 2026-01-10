@@ -83,8 +83,47 @@ vector_store:
     - "Media in {}"
     - "Transport in {}"
     - "Geography of {}"
+    - "Child care in {}"
+    - "Early childhood education in {}"
+    - "Preschool education in {}"
+    - "Family life in {}"
 
-  
+  # Additional Wikipedia pages to include beyond country-based templates
+  additional_wikipedia_pages:
+    - "Father's Day"
+    - "Parents' Day"
+    - "Gift"
+    - "List of holidays"
+    - "List of multinational festivals and holidays"
+    - "Valentine's Day"
+    - "English festivals"
+    - "Family in China"
+    - "Daily life in China"
+    - "Chinese New Year"
+    - "Spring Festival"
+    - "Mid-Autumn Festival"
+    - "Filial piety"
+    - "Chinese social values"
+    - "Gift-giving in China"
+    - "Red envelope"
+    - "Sport in China"
+    - "Chinese sportspeople"
+    - "Early childhood education in China"
+    - "Family in Iran"
+    - "Daily life in Iran"
+    - "Islam in Iran"
+    - "Shia Islam in Iran"
+    - "Nowruz"
+    - "Yalda Night"
+    - "Taarof"
+    - "Iranian etiquette"
+    - "Gift-giving in Iran"
+    - "Food culture in Iran"
+    - "Sport in Iran"
+    - "Wrestling in Iran"
+
+
+
   # Batch processing (NEW)
   embed_batch_size: 128  # Batch size for embedding calculations (GPU memory dependent)
   
@@ -115,6 +154,7 @@ retrieval:
   use_dense: false      # Dense retrieval (SECONDARY)
   use_sparse: false     # Sparse retrieval (SUPPORTING)
   use_reranker: true   # Cross-encoder reranking (FINAL DECISION)
+  use_web: true       # Enable web search for retrieval
   
   # ColBERT settings (late-interaction retrieval)
   colbert_model: "colbert-ir/colbertv2.0"  # ColBERT v2

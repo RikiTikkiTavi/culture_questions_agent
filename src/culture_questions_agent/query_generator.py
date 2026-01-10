@@ -33,7 +33,7 @@ class QueryGenerator:
         Input Text Example:
         "The user is asking about China. \nQueries: ['China clothing', 'Hanfu']"
         """
-        logger.info(f"Parsing generated output: '{text}'")
+        logger.debug(f"Parsing generated output: '{text}'")
         try:
             # Step A: Isolate the part after "Queries:"
             if "Queries:" in text:
@@ -75,7 +75,7 @@ class QueryGenerator:
         Returns:
             List of generated search queries
         """
-        logger.info(f"Generating {num_queries} search queries for: '{question}'")
+        logger.debug(f"Generating {num_queries} search queries for: '{question}'")
         
         # Render prompt from Jinja2 template
         prompt = self.query_template.render(

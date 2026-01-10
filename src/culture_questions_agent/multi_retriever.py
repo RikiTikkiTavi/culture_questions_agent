@@ -17,6 +17,7 @@ from llama_index.retrievers.bm25 import BM25Retriever
 from llama_index.core.postprocessor import SentenceTransformerRerank
 
 from culture_questions_agent.colbert_retriever import ColBERTRetriever
+from culture_questions_agent.search_tools import SearchEngine
 
 logger = logging.getLogger(__name__)
 
@@ -40,15 +41,18 @@ class MultiRetrieverOrchestrator:
         index: VectorStoreIndex,
         nodes: List[BaseNode],
         colbert_retriever: Optional[ColBERTRetriever] = None,
+        search_engine: Optional[SearchEngine] = None,
         dense_top_k: int = 50,
         sparse_top_k: int = 50,
         colbert_top_k: int = 50,
+        web_top_k: int = 5,
         reranker_model: str = "BAAI/bge-reranker-v2-m3",
         reranker_top_k: int = 10,
         cache_dir: Optional[str] = None,
         use_colbert: bool = True,
         use_dense: bool = True,
         use_sparse: bool = True,
+        use_web: bool = False,
         use_reranker: bool = True,
     ):
         """
@@ -58,15 +62,18 @@ class MultiRetrieverOrchestrator:
             index: VectorStoreIndex for dense retrieval
             nodes: All indexed nodes (for BM25 and ColBERT)
             colbert_retriever: Pre-initialized ColBERT retriever (optional)
+            search_engine: Pre-initialized SearchEngine for web search (optional)
             dense_top_k: Top-k for dense retrieval
             sparse_top_k: Top-k for sparse retrieval
             colbert_top_k: Top-k for ColBERT retrieval
+            web_top_k: Top-k for web search results
             reranker_model: Cross-encoder model for reranking
             reranker_top_k: Final top-k after reranking
             cache_dir: Cache directory for models
             use_colbert: Enable ColBERT retrieval
             use_dense: Enable dense retrieval
             use_sparse: Enable sparse retrieval
+            use_web: Enable web search retrieval
             use_reranker: Enable cross-encoder reranking
         """
         logger.info("="*80)
@@ -78,12 +85,16 @@ class MultiRetrieverOrchestrator:
         self.dense_top_k = dense_top_k
         self.sparse_top_k = sparse_top_k
         self.colbert_top_k = colbert_top_k
+        self.web_top_k = web_top_k
         self.reranker_top_k = reranker_top_k
         
         self.use_colbert = use_colbert
         self.use_dense = use_dense
         self.use_sparse = use_sparse
+        self.use_web = use_web
         self.use_reranker = use_reranker
+        
+        self.search_engine = search_engine
         
         # Initialize retrievers
         logger.info(f"[1/4] Initializing Retrievers")
@@ -131,6 +142,19 @@ class MultiRetrieverOrchestrator:
             logger.info(f"  ⊗ ColBERT retriever disabled")
             self.colbert_retriever = None
         
+        # Web search engine
+        if self.use_web:
+            if search_engine:
+                logger.info(f"  ✓ Web search engine (provided, max-{web_top_k} results)")
+                self.search_engine = search_engine
+            else:
+                logger.warning(f"  ⊗ Web search enabled but no SearchEngine provided")
+                self.use_web = False
+                self.search_engine = None
+        else:
+            logger.info(f"  ⊗ Web search disabled")
+            self.search_engine = None
+        
         # Reranker (cross-encoder)
         if self.use_reranker:
             logger.info(f"[2/4] Initializing Reranker")
@@ -157,6 +181,8 @@ class MultiRetrieverOrchestrator:
         cache_dir: Optional[str] = None,
         device: str = "cuda",
         use_reranker: bool = True,
+        use_web: bool = False,
+        search_engine: Optional[SearchEngine] = None,
     ) -> "MultiRetrieverOrchestrator":
         """
         Load orchestrator from persisted directory.
@@ -167,6 +193,8 @@ class MultiRetrieverOrchestrator:
             cache_dir: Cache directory for models
             device: Device for ColBERT ('cuda' or 'cpu')
             use_reranker: Enable cross-encoder reranking
+            use_web: Enable web search retrieval
+            search_engine: Pre-initialized SearchEngine for web search (optional)
             
         Returns:
             Initialized MultiRetrieverOrchestrator
@@ -236,15 +264,18 @@ class MultiRetrieverOrchestrator:
             index=index,
             nodes=nodes,
             colbert_retriever=colbert_retriever,
+            search_engine=search_engine,
             dense_top_k=config.get('dense_top_k', 50),
             sparse_top_k=config.get('sparse_top_k', 50),
             colbert_top_k=config.get('colbert_top_k', 50),
+            web_top_k=config.get('web_top_k', 5),
             reranker_model=config.get('reranker_model', 'BAAI/bge-reranker-v2-m3'),
             reranker_top_k=config.get('reranker_top_k', 10),
             cache_dir=cache_dir,
             use_colbert=config.get('use_colbert', True),
             use_dense=config.get('use_dense', True),
             use_sparse=config.get('use_sparse', True),
+            use_web=use_web,  # Use parameter
             use_reranker=use_reranker,  # Use parameter instead of config
         )
     
@@ -252,12 +283,14 @@ class MultiRetrieverOrchestrator:
         self,
         query: str,
         return_sources: bool = False,
+        include_options_in_web_query: bool = False,
+        options: Optional[Dict[str, str]] = None,
     ) -> List[NodeWithScore]:
         """
-        Retrieve documents using multi-retriever fusion.
+        Retrieve documents using multi-retriever fusion including web search.
         
         Pipeline:
-        1. Execute all enabled retrievers
+        1. Execute all enabled retrievers (dense, sparse, ColBERT, web)
         2. Union results (deduplicate by node_id)
         3. Rerank if enabled
         4. Return top-k
@@ -265,22 +298,24 @@ class MultiRetrieverOrchestrator:
         Args:
             query: Search query
             return_sources: If True, return metadata about which retrievers matched each node
+            include_options_in_web_query: If True and web search enabled, append options to query
+            options: Options to include in web query (if include_options_in_web_query=True)
             
         Returns:
             List of NodeWithScore objects (reranked if enabled)
         """
-        logger.info("="*60)
-        logger.info(f"Multi-Retrieval Query: '{query}'")
-        logger.info("="*60)
+        logger.debug("="*60)
+        logger.debug(f"Multi-Retrieval Query: '{query}'")
+        logger.debug("="*60)
         
         all_results = []
         source_tracking = defaultdict(list)
         
         # Execute dense retrieval
         if self.dense_retriever:
-            logger.info(f"[1/3] Dense Retrieval (top-{self.dense_top_k})...")
+            logger.debug(f"[1/3] Dense Retrieval (top-{self.dense_top_k})...")
             dense_results = self.dense_retriever.retrieve(query)
-            logger.info(f"  ✓ Retrieved {len(dense_results)} dense results")
+            logger.debug(f"  ✓ Retrieved {len(dense_results)} dense results")
             
             for node_with_score in dense_results:
                 all_results.append(node_with_score)
@@ -288,9 +323,9 @@ class MultiRetrieverOrchestrator:
         
         # Execute sparse retrieval
         if self.sparse_retriever:
-            logger.info(f"[2/3] Sparse Retrieval (top-{self.sparse_top_k})...")
+            logger.debug(f"[2/3] Sparse Retrieval (top-{self.sparse_top_k})...")
             sparse_results = self.sparse_retriever.retrieve(query)
-            logger.info(f"  ✓ Retrieved {len(sparse_results)} sparse results")
+            logger.debug(f"  ✓ Retrieved {len(sparse_results)} sparse results")
             
             for node_with_score in sparse_results:
                 all_results.append(node_with_score)
@@ -298,14 +333,53 @@ class MultiRetrieverOrchestrator:
         
         # Execute ColBERT retrieval
         if self.colbert_retriever:
-            logger.info(f"[3/3] ColBERT Late-Interaction Retrieval (top-{self.colbert_top_k})...")
+            logger.debug(f"[3/4] ColBERT Late-Interaction Retrieval (top-{self.colbert_top_k})...")
             query_bundle = QueryBundle(query_str=query)
             colbert_results = self.colbert_retriever.retrieve(query_bundle)
-            logger.info(f"  ✓ Retrieved {len(colbert_results)} ColBERT results")
+            logger.debug(f"  ✓ Retrieved {len(colbert_results)} ColBERT results")
             
             for node_with_score in colbert_results:
                 all_results.append(node_with_score)
                 source_tracking[node_with_score.node.node_id].append("colbert")
+        
+        # Execute web search
+        if self.use_web and self.search_engine:
+            logger.debug(f"[4/4] Web Search (top-{self.web_top_k})...")
+            
+            # Build query with options if configured
+            web_query = query
+            if include_options_in_web_query and options:
+                web_query = query + " " + " ".join(options.values())
+            
+            logger.debug(f"  Searching: '{web_query}'")
+            
+            # Get web search results as list to maintain individual snippets
+            web_results = self.search_engine.search_web(
+                web_query,
+                max_results=self.web_top_k,
+                return_list=True
+            )
+            
+            if web_results:
+                logger.debug(f"  ✓ Retrieved {len(web_results)} web results")
+                
+                # Convert web results to NodeWithScore objects
+                # Use a synthetic node_id to allow deduplication
+                for i, text in enumerate(web_results):
+                    if isinstance(text, str) and len(text) > 20:
+                        # Create a simple node from web result
+                        from llama_index.core.schema import TextNode
+                        
+                        node = TextNode(
+                            text=text,
+                            id_=f"web_{hash(text)}",  # Hash for deduplication
+                            metadata={"source": "web"}
+                        )
+                        node_with_score = NodeWithScore(node=node, score=1.0)
+                        all_results.append(node_with_score)
+                        source_tracking[node.node_id].append("web")
+            else:
+                logger.debug(f"  No web results found")
         
         # Deduplicate by node_id
         seen = set()
@@ -315,16 +389,16 @@ class MultiRetrieverOrchestrator:
                 seen.add(node_with_score.node.node_id)
                 unique_results.append(node_with_score)
         
-        logger.info(f"[Fusion] Union: {len(all_results)} → {len(unique_results)} unique results")
+        logger.debug(f"[Fusion] Union: {len(all_results)} → {len(unique_results)} unique results")
         
         # Log source statistics
         multi_source_count = sum(1 for sources in source_tracking.values() if len(sources) > 1)
-        logger.info(f"  Multi-source matches: {multi_source_count}")
+        logger.debug(f"  Multi-source matches: {multi_source_count}")
         
         # Rerank if enabled
         if self.reranker and unique_results:
-            logger.info(f"[Reranking] Cross-Encoder (top-{self.reranker_top_k})...")
-            logger.info(f"  Reranking {len(unique_results)} candidates...")
+            logger.debug(f"[Reranking] Cross-Encoder (top-{self.reranker_top_k})...")
+            logger.debug(f"  Reranking {len(unique_results)} candidates...")
             
             reranked_results = self.reranker.postprocess_nodes(
                 unique_results,
@@ -336,19 +410,19 @@ class MultiRetrieverOrchestrator:
                 if node_with_score.score is not None:
                     node_with_score.score = float(node_with_score.score)
             
-            logger.info(f"  ✓ Reranked → {len(reranked_results)} final results")
+            logger.debug(f"  ✓ Reranked → {len(reranked_results)} final results")
             
             if reranked_results:
-                logger.info(f"    Top rerank score: {reranked_results[0].score:.4f}")
-                logger.info(f"    Bottom rerank score: {reranked_results[-1].score:.4f}")
+                logger.debug(f"    Top rerank score: {reranked_results[0].score:.4f}")
+                logger.debug(f"    Bottom rerank score: {reranked_results[-1].score:.4f}")
             
             final_results = reranked_results
         else:
             final_results = unique_results[:self.reranker_top_k]
         
-        logger.info("="*60)
-        logger.info(f"✓ Final: {len(final_results)} results")
-        logger.info("="*60)
+        logger.debug("="*60)
+        logger.debug(f"✓ Final: {len(final_results)} results")
+        logger.debug("="*60)
         
         # Optionally attach source metadata
         if return_sources:
@@ -363,6 +437,8 @@ class MultiRetrieverOrchestrator:
         self,
         queries: List[str],
         deduplicate: bool = True,
+        include_options_in_web_query: bool = False,
+        options: Optional[Dict[str, str]] = None,
     ) -> List[NodeWithScore]:
         """
         Retrieve for multiple queries and optionally deduplicate.
@@ -370,16 +446,22 @@ class MultiRetrieverOrchestrator:
         Args:
             queries: List of query strings
             deduplicate: Remove duplicate nodes across queries
+            include_options_in_web_query: If True and web search enabled, append options to query
+            options: Options to include in web query (if include_options_in_web_query=True)
             
         Returns:
             Combined list of NodeWithScore objects
         """
-        logger.info(f"Batch retrieval for {len(queries)} queries...")
+        logger.debug(f"Batch retrieval for {len(queries)} queries...")
         
         all_results = []
         for i, query in enumerate(queries, 1):
-            logger.info(f"\n--- Query {i}/{len(queries)} ---")
-            results = self.retrieve(query)
+            logger.debug(f"\n--- Query {i}/{len(queries)} ---")
+            results = self.retrieve(
+                query,
+                include_options_in_web_query=include_options_in_web_query,
+                options=options
+            )
             all_results.extend(results)
         
         if deduplicate:
@@ -390,7 +472,7 @@ class MultiRetrieverOrchestrator:
                     seen.add(node_with_score.node.node_id)
                     unique_results.append(node_with_score)
             
-            logger.info(
+            logger.debug(
                 f"\nBatch deduplication: {len(all_results)} → {len(unique_results)} unique"
             )
             return unique_results
@@ -401,6 +483,8 @@ class MultiRetrieverOrchestrator:
         self,
         query: str,
         include_metadata: bool = False,
+        include_options_in_web_query: bool = False,
+        options: Optional[Dict[str, str]] = None,
     ) -> List[str]:
         """
         Retrieve and return text content only.
@@ -408,11 +492,18 @@ class MultiRetrieverOrchestrator:
         Args:
             query: Search query
             include_metadata: Include metadata in returned text
+            include_options_in_web_query: If True and web search enabled, append options to query
+            options: Options to include in web query (if include_options_in_web_query=True)
             
         Returns:
             List of text strings
         """
-        results = self.retrieve(query, return_sources=True)
+        results = self.retrieve(
+            query,
+            return_sources=True,
+            include_options_in_web_query=include_options_in_web_query,
+            options=options
+        )
         
         texts = []
         for node_with_score in results:
@@ -431,6 +522,8 @@ class MultiRetrieverOrchestrator:
         queries: List[str],
         deduplicate: bool = True,
         include_metadata: bool = False,
+        include_options_in_web_query: bool = False,
+        options: Optional[Dict[str, str]] = None,
     ) -> List[str]:
         """
         Retrieve for multiple queries and return text content only.
@@ -439,11 +532,18 @@ class MultiRetrieverOrchestrator:
             queries: List of query strings
             deduplicate: Remove duplicate texts across queries
             include_metadata: Include metadata in returned text
+            include_options_in_web_query: If True and web search enabled, append options to query
+            options: Options to include in web query (if include_options_in_web_query=True)
             
         Returns:
             List of text strings
         """
-        results = self.retrieve_batch(queries, deduplicate=deduplicate)
+        results = self.retrieve_batch(
+            queries,
+            deduplicate=deduplicate,
+            include_options_in_web_query=include_options_in_web_query,
+            options=options
+        )
         
         texts = []
         for node_with_score in results:
@@ -470,11 +570,13 @@ class MultiRetrieverOrchestrator:
                 "dense": self.use_dense,
                 "sparse": self.use_sparse,
                 "colbert": self.use_colbert,
+                "web": self.use_web,
             },
             "top_k": {
                 "dense": self.dense_top_k if self.use_dense else 0,
                 "sparse": self.sparse_top_k if self.use_sparse else 0,
                 "colbert": self.colbert_top_k if self.use_colbert else 0,
+                "web": self.web_top_k if self.use_web else 0,
             },
             "reranker": {
                 "enabled": self.use_reranker,
