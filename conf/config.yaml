@@ -4,20 +4,175 @@ defaults:
 model:
   llm_name: "meta-llama/Llama-3.1-8B"
   cache_dir: "/data/horse/ws/s4610340-culture_agent/.cache"
-  reranker_name: "BAAI/bge-reranker-large"
+  reranker_name: "BAAI/bge-reranker-v2-m3"  # Upgraded to v2-m3 for better quality
+  # Predictor type: "discriminative" (NLL-based) or "generative" (text generation)
+  predictor_type: "discriminative"
+  # Parameters for generative predictor
+  max_new_tokens: 10
+  temperature: 0.0
 
 vector_store:
   auto_suggest: false
   cache_dir: ${model.cache_dir}
   embedding_model_name: "BAAI/bge-m3"
   persist_dir: "/data/horse/ws/s4610340-culture_agent/culture_questions_agent/storage"
+  
+  # Wikivoyage configuration (NEW)
+  use_wikivoyage: true  # Set to true to include Wikivoyage data in the index
   wikivoyage_xml_path: /data/horse/ws/s4610340-culture_agent/culture_questions_agent/data/wiki/datasets/wikivoyage.xml
-  chunk_size: 512
-  chunk_overlap: 50
+  wikivoyage_num_workers: 5  # Number of parallel workers for Wikivoyage parsing (null = CPU count - 1)
+  
+  # Wikipedia caching (NEW)
+  wikipedia_cache_dir: "cache/wikipedia"  # Cache directory for downloaded Wikipedia pages
+  force_wikipedia_refresh: false  # Set to true to force re-download (ignore cache)
+  
+  # Country filtering (NEW) - Reduce dataset size
+  country_limit: null  # Limit to first N countries (null/commented for all countries)
+  country_filter_list:  # 10 diverse, culturally rich countries
+    - "Japan"
+    - "France"
+    - "India"
+    - "China"
+    - "Mexico"
+    - "Iran"
+    - "United Kingdom"
+    - "UK"
+    - "United States"
+    - "US"
+  #   - "Jordan"
+  #   # Sub-Saharan Africa
+  #   - "South Africa"
+  #   - "Nigeria"
+  #   - "Ethiopia"
+  #   - "Kenya"
+  #   - "Ghana"
+  
+  # Topic templates (optional override)
+  # topic_templates:
+  #   - "Culture of {}"
+  #   - "Cuisine of {}"
+  #   - "Music of {}"
+  topic_templates:
+    - "Culture of {}"
+    - "Public holidays in {}"
+    - "Customs and traditions of {}"
+    - "Daily life in {}"
+    - "Food culture in {}"
+    - "Cuisine of {}"
+    - "Education in {}"
+    - "Education system in {}"
+    - "School life in {}"
+    - "Youth culture in {}"
+    - "Employment in {}"
+    - "Labor law in {}"
+    - "Pensions in {}"
+    - "Social security in {}"
+    - "Economy of {}"
+    - "Agriculture in {}"
+    - "Demographics of {}"
+    - "Religion in {}"
+    - "Religious practices in {}"
+    - "Sport in {}"
+    - "Sports culture in {}"
+    - "Olympic Games in {}"
+    - "Leisure in {}"
+    - "Media in {}"
+    - "Transport in {}"
+    - "Geography of {}"
+    - "Child care in {}"
+    - "Early childhood education in {}"
+    - "Preschool education in {}"
+    - "Family life in {}"
+
   # Additional Wikipedia pages to include beyond country-based templates
-  additional_wikipedia_pages: []  # e.g., ["Traditional Chinese medicine", "Hofstede's cultural dimensions theory"]
+  additional_wikipedia_pages:
+    - "Father's Day"
+    - "Parents' Day"
+    - "Gift"
+    - "List of holidays"
+    - "List of multinational festivals and holidays"
+    - "Valentine's Day"
+    - "English festivals"
+    - "Family in China"
+    - "Daily life in China"
+    - "Chinese New Year"
+    - "Spring Festival"
+    - "Mid-Autumn Festival"
+    - "Filial piety"
+    - "Chinese social values"
+    - "Gift-giving in China"
+    - "Red envelope"
+    - "Sport in China"
+    - "Chinese sportspeople"
+    - "Early childhood education in China"
+    - "Family in Iran"
+    - "Daily life in Iran"
+    - "Islam in Iran"
+    - "Shia Islam in Iran"
+    - "Nowruz"
+    - "Yalda Night"
+    - "Taarof"
+    - "Iranian etiquette"
+    - "Gift-giving in Iran"
+    - "Food culture in Iran"
+    - "Sport in Iran"
+    - "Wrestling in Iran"
+    - "Public school (United Kingdom)"
+    - "State school"
+    - "After-school activity"
+    - "Prom"
+    - "Retirement age"
+    - "Youth in Iran"
+    - "List of secondary education systems by country"
+    - "Middle school"
+
+
+  # Batch processing (NEW)
+  embed_batch_size: 128  # Batch size for embedding calculations (GPU memory dependent)
+  
+  # REMOVED: character-based chunking (obsolete)
+  # chunk_size: 512
+  # chunk_overlap: 50
+  
+  # NEW: Semantic chunking configuration
+  chunking_strategy: "multi_granularity"  # Options: "multi_granularity", "reranker_aligned"
+  tokenizer_name: "BAAI/bge-m3"  # Tokenizer for accurate token counting
+  
+  # Multi-granularity settings (when chunking_strategy = "multi_granularity")
+  granularities:
+    - small    # 200-400 tokens: facts, definitions
+    - medium   # 600-900 tokens: explanations
+    #- large    # 1500-3000 tokens: cultural/historical context
+  
+  # Reranker-aligned settings (when chunking_strategy = "reranker_aligned")
+  target_tokens: 900   # Target chunk size for reranker
+  max_tokens: 1200     # Maximum chunk size
 
 retrieval:
+  # Device configuration (H100 GPUs available)
+  device: "cuda"
+  
+  # Multi-retriever configuration
+  use_colbert: true    # Late-interaction retrieval (PRIMARY)
+  use_dense: false      # Dense retrieval (SECONDARY)
+  use_sparse: false     # Sparse retrieval (SUPPORTING)
+  use_reranker: true   # Cross-encoder reranking (FINAL DECISION)
+  use_web: true       # Enable web search for retrieval
+  
+  # ColBERT settings (late-interaction retrieval)
+  colbert_model: "colbert-ir/colbertv2.0"  # ColBERT v2
+  colbert_top_k: 50  # Number of results from ColBERT
+  
+  # Dense retrieval settings (BGE-M3)
+  hybrid_dense_top_k: 50  # Number of results from dense retrieval
+  
+  # Sparse retrieval settings (BM25)
+  hybrid_sparse_top_k: 50  # Number of results from BM25
+  
+  # Reranking settings (cross-encoder)
+  reranker_top_k: 5  # Final number of results after reranking
+  
+  # Legacy settings (for backward compatibility with existing code)
   # Query generation
   num_queries: 3  # Number of search queries to generate from question
   use_direct_question: false  # Use question directly for search instead of generating queries
@@ -26,26 +181,21 @@ retrieval:
   use_question_context: true  # Include question context in NLL prediction
   use_option_context: false    # Include option-specific context in NLL prediction
   
-  # Web search settings
+  # Web search settings (if web search is still used)
   max_search_chars: 5000  # Maximum characters to keep from search results
   max_web_search_results: 10
   include_title: false  # Include title in search snippets
   ddgs_backend: "yandex,yahoo"  # DDGS search backends to use
+
   
-  # Hybrid retrieval (BM25 + Vector) from local documents
-  use_hybrid_retrieval: true  # Enable hybrid retrieval from local vector store
-  hybrid_sparse_top_k: 10  # Number of results from BM25 sparse retrieval
-  hybrid_dense_top_k: 10   # Number of results from vector dense retrieval
-  hybrid_final_top_k: 5    # Number of final results after RRF fusion
-  hybrid_rrf_k: 60         # RRF constant (typically 60)
-  
-  # Reranking settings
-  use_reranker: true  # Use reranker to select top results from all sources
-  reranker_top_k: 3  # Number of top results to keep after reranking
   include_options_in_query: false  # Include options in search query when using reranker
+
+# Optional: Run test query after building index
+run_test_query: false  # Set to true to validate retrieval system
 
 evaluation:
   max_questions: null  # Maximum number of questions to evaluate (null = all questions)
+
 
 mlflow:
   tracking_uri: "sqlite:///tracking/mlruns.sqlite"

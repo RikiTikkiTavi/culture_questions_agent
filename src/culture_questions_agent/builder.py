@@ -301,8 +301,9 @@ def _process_wikivoyage_pages_chunk(
         if normalized_filter:
             title_lower = title.lower()
             country_match = any(country in title_lower for country in normalized_filter)
+            country_mentioned = any(country in text.lower() for country in normalized_filter)
             
-            if not country_match:
+            if not country_match and not country_mentioned:
                 continue
         
         # Parse into sections

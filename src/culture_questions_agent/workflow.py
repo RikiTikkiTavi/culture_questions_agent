@@ -15,7 +15,7 @@ from llama_index.core.workflow import (
 from culture_questions_agent.structures import MCQQuestion
 from culture_questions_agent.query_generator import QueryGenerator
 from culture_questions_agent.search_tools import SearchEngine
-from culture_questions_agent.nll_predictor import NLLPredictor
+from culture_questions_agent.predictor_factory import PredictorFactory
 from culture_questions_agent.reranker import Reranker
 from culture_questions_agent.multi_retriever import MultiRetrieverOrchestrator
 
@@ -63,26 +63,43 @@ class CulturalQAWorkflow(Workflow):
         self.cfg = cfg
         
         logger.info("="*80)
-        logger.info("Initializing Cultural QA Workflow (LLM Query Generation + NLL)")
+        logger.info("Initializing Cultural QA Workflow (LLM Query Generation + Configurable Prediction)")
         logger.info("="*80)
         
         # Set cache directory
         os.environ["HF_HOME"] = cfg.model.cache_dir
         
-        # [1] Initialize NLL Predictor (loads the model)
-        logger.info(f"[1/3] Initializing NLL Predictor: {cfg.model.llm_name}")
-        self.nll_predictor = NLLPredictor(
+        # Get predictor type from config
+        predictor_type = cfg.model.get("predictor_type", "discriminative")
+        logger.info(f"Predictor type: {predictor_type}")
+        
+        # [1] Initialize Predictor using factory
+        logger.info(f"[1/5] Initializing {predictor_type.capitalize()} Predictor: {cfg.model.llm_name}")
+        self.predictor = PredictorFactory.create_predictor(
+            predictor_type=predictor_type,
             model_name=cfg.model.llm_name,
             cache_dir=cfg.model.cache_dir,
-            device="auto"
+            device="auto",
+            max_new_tokens=cfg.model.get("max_new_tokens", 10),
+            temperature=cfg.model.get("temperature", 0.1)
         )
         
-        # [2] Initialize Query Generator (reuses the same model/tokenizer)
-        logger.info(f"[2/3] Initializing Query Generator (reusing model)")
-        self.query_generator = QueryGenerator(
-            model=self.nll_predictor.model,
-            tokenizer=self.nll_predictor.tokenizer
-        )
+        # [2] Initialize Query Generator (reuses the same model/tokenizer for discriminative)
+        logger.info(f"[2/5] Initializing Query Generator")
+        if predictor_type == "discriminative":
+            # Reuse model/tokenizer from NLL predictor
+            logger.info(f"  Reusing model/tokenizer from NLL predictor")
+            self.query_generator = QueryGenerator(
+                model=self.predictor.model,
+                tokenizer=self.predictor.tokenizer
+            )
+        else:
+            # For generative predictor, also reuse model/tokenizer
+            logger.info(f"  Reusing model/tokenizer from generative predictor")
+            self.query_generator = QueryGenerator(
+                model=self.predictor.model,
+                tokenizer=self.predictor.tokenizer
+            )
         
         # [3] Initialize Search Engine
         logger.info(f"[3/5] Initializing Search Engine (Wikipedia + DDGS)")
@@ -95,6 +112,7 @@ class CulturalQAWorkflow(Workflow):
         # [4] Initialize SOTA Multi-Retriever (ColBERT + Dense + Sparse + Web)
         # Reranking is disabled here - done once after combining all documents
         use_retrieval = cfg.retrieval.get("use_hybrid_retrieval", True)
+        self.use_web = cfg.retrieval.get("use_web", False)
         if use_retrieval:
             logger.info(f"[4/5] Initializing SOTA Multi-Retriever (ColBERT + Dense + Sparse + Web)")
             logger.info(f"  Reranking disabled in orchestrator (will rerank combined results)")
@@ -119,7 +137,6 @@ class CulturalQAWorkflow(Workflow):
         # [5] Unified reranker for combined results (local + web)
         # Controlled by single use_reranker config option
         self.use_reranker = cfg.retrieval.get("use_reranker", True)
-        self.use_web = cfg.retrieval.get("use_web", False)
         
         if self.use_reranker:
             logger.info(f"[5/5] Initializing Combined Results Reranker: {cfg.model.get('reranker_name', 'BAAI/bge-reranker-v2-m3')}")
@@ -285,9 +302,9 @@ class CulturalQAWorkflow(Workflow):
         )
     
     @step
-    async def predict_with_nll(self, ev: SearchEvent) -> StopEvent:
+    async def predict_answer(self, ev: SearchEvent) -> StopEvent:
         """
-        Predict best option using NLL loss with dual-path contexts.
+        Predict best option using the configured prediction strategy.
         
         Args:
             ev: SearchEvent with question context and option contexts
@@ -295,7 +312,7 @@ class CulturalQAWorkflow(Workflow):
         Returns:
             StopEvent with the final answer
         """
-        logger.info(f"🎯 [Step 3/3] Predicting answer using NLL with dual-path evidence...")
+        logger.info(f"🎯 [Step 3/3] Predicting answer using {self.cfg.model.get('predictor_type', 'discriminative')} strategy...")
         
         # Get config flags for context enrichment
         use_question_ctx = self.cfg.retrieval.get("use_question_context", True)
@@ -303,16 +320,14 @@ class CulturalQAWorkflow(Workflow):
         
         logger.info(f"  Context enrichment: question={use_question_ctx}, option={use_option_ctx}")
         
-        # Build contexts for each option:
-        # Combine question context + option-specific context based on config
-        
         question_ctx = ev.question_context if use_question_ctx else [""]
+        option_ctx = ev.option_contexts if use_option_ctx else {}
 
-        # Predict using NLL
-        best_option, scores = self.nll_predictor.predict_best_option(
+        # Predict using configured predictor
+        best_option, scores = self.predictor.predict_best_option(
             question=ev.question,
             options=ev.options,
-            option_contexts=ev.option_contexts,
+            option_contexts=option_ctx,
             question_contexts=question_ctx,
         )
         

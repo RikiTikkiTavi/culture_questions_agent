@@ -1,29 +1,29 @@
-{% if context_parts %}
+{% if context_parts -%}
 Context:
 {% for part in context_parts %}
 {{ part }}
 {% endfor %}
 
-{% endif %}
-Question: What is the capital of France?
-Options:
-A. London
-B. Paris
-C. Berlin
-D. Madrid
-Answer: Paris
+---
 
-Question: Which instrument is traditional in Japanese music?
+{% endif -%}
+Choose the correct answer based only on the context and the cultural norms implied by the question. Select exactly one option (A-D). Answer with the letter only.
+
+Question: What gifts do fathers get on Father's Day in the UK?
+
 Options:
-A. Guitar
-B. Piano
-C. Koto
-D. Violin
-Answer: Koto
+- A. money
+- B. socks
+- C. tools
+- D. wallet
+
+Answer: B
 
 Question: {{ question }}
+
 Options:
-{% for key, value in options.items() %}
-{{ key }}. {{ value }}
+{% for key, value in options.items() -%}
+- {{ key }}. {{ value }}
 {% endfor %}
+
 Answer:
