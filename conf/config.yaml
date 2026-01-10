@@ -168,7 +168,7 @@ retrieval:
   hybrid_sparse_top_k: 10  # Number of results from BM25
   
   # Reranking settings (cross-encoder)
-  reranker_top_k: 5  # Final number of results after reranking
+  reranker_top_k: 4  # Final number of results after reranking
   
   # Legacy settings (for backward compatibility with existing code)
   # Query generation

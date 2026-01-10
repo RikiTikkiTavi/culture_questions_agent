@@ -396,6 +396,7 @@ class MultiRetrieverOrchestrator:
         
         all_results = []
         source_tracking = defaultdict(list)
+        training_results: List[NodeWithScore] = []
         
         # Execute dense retrieval
         if self.dense_retriever:
@@ -589,6 +590,33 @@ class MultiRetrieverOrchestrator:
             final_results = reranked_results
         else:
             final_results = unique_results[:self.reranker_top_k]
+
+        # Reserve the first two slots for training-index results (if enabled).
+        # This protects short-but-useful training nodes from being filtered out
+        # when mixed with much longer wiki/web nodes.
+        if self.training_retriever and training_results:
+            reserved_training_ids: List[str] = []
+            seen_training = set()
+            for nws in training_results:
+                nid = nws.node.node_id
+                if nid in seen_training:
+                    continue
+                seen_training.add(nid)
+                reserved_training_ids.append(nid)
+                if len(reserved_training_ids) >= 2:
+                    break
+
+            if reserved_training_ids:
+                final_by_id = {nws.node.node_id: nws for nws in final_results}
+                reserved_training = [
+                    final_by_id.get(nid, next((n for n in training_results if n.node.node_id == nid), None))
+                    for nid in reserved_training_ids
+                ]
+                reserved_training = [n for n in reserved_training if n is not None]
+
+                reserved_set = set(reserved_training_ids)
+                remainder = [nws for nws in final_results if nws.node.node_id not in reserved_set]
+                final_results = (reserved_training + remainder)[: self.reranker_top_k]
         
         logger.debug("="*60)
         logger.debug(f"✓ Final: {len(final_results)} results")
