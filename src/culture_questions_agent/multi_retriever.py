@@ -20,6 +20,8 @@ from llama_index.core.postprocessor import SentenceTransformerRerank
 from culture_questions_agent.colbert_retriever import ColBERTRetriever
 from culture_questions_agent.search_tools import SearchEngine
 
+from mlflow.entities import Document
+
 logger = logging.getLogger(__name__)
 
 
@@ -365,6 +367,27 @@ class MultiRetrieverOrchestrator:
             use_reranker=use_reranker,
         )
     
+    def _deduplicate(self, nodes: list[NodeWithScore]) -> list[NodeWithScore]:
+        """Deduplicate NodeWithScore list by node_id."""
+        seen = set()
+        unique_nodes = []
+        for nws in nodes:
+            if nws.node.node_id not in seen:
+                seen.add(nws.node.node_id)
+                unique_nodes.append(nws)
+        return unique_nodes
+
+    def _deduplicate_by_content(self, nodes: list[NodeWithScore]) -> list[NodeWithScore]:
+        """Deduplicate NodeWithScore list by content."""
+        seen = set()
+        unique_nodes = []
+        for nws in nodes:
+            content = nws.node.get_content()
+            if content not in seen:
+                seen.add(content)
+                unique_nodes.append(nws)
+        return unique_nodes
+
     def retrieve(
         self,
         query: str,
@@ -401,20 +424,8 @@ class MultiRetrieverOrchestrator:
         # Execute dense retrieval
         if self.dense_retriever:
             logger.debug(f"[1/3] Dense Retrieval (top-{self.dense_top_k})...")
-            with mlflow.start_span(name="dense_retrieval", span_type="RETRIEVER") as span:
-                span.set_inputs({"query": query, "top_k": self.dense_top_k})
-                dense_results = self.dense_retriever.retrieve(query)
-                span.set_outputs({
-                    "num_results": len(dense_results),
-                    "results": [
-                        {
-                            "text": node.node.get_content()[:200],  # First 200 chars
-                            "score": float(node.score) if node.score else None,
-                            "metadata": node.node.metadata,
-                        }
-                        for node in dense_results[:5]  # Top 5 only to avoid large payloads
-                    ]
-                })
+            dense_results = self.dense_retriever.retrieve(query)
+            dense_results = self._deduplicate(dense_results)
             logger.debug(f"  ✓ Retrieved {len(dense_results)} dense results")
             
             for node_with_score in dense_results:
@@ -427,6 +438,7 @@ class MultiRetrieverOrchestrator:
             with mlflow.start_span(name="sparse_retrieval", span_type="RETRIEVER") as span:
                 span.set_inputs({"query": query, "top_k": self.sparse_top_k})
                 sparse_results = self.sparse_retriever.retrieve(query)
+                sparse_results = self._deduplicate(sparse_results)
                 span.set_outputs({
                     "num_results": len(sparse_results),
                     "results": [
@@ -451,6 +463,7 @@ class MultiRetrieverOrchestrator:
                 span.set_inputs({"query": query, "top_k": self.colbert_top_k})
                 query_bundle = QueryBundle(query_str=query)
                 colbert_results = self.colbert_retriever.retrieve(query_bundle)
+                colbert_results = self._deduplicate(colbert_results)
                 span.set_outputs({
                     "num_results": len(colbert_results),
                     "results": [
@@ -474,17 +487,11 @@ class MultiRetrieverOrchestrator:
             with mlflow.start_span(name="training_retrieval", span_type="RETRIEVER") as span:
                 span.set_inputs({"query": query, "top_k": self.training_top_k})
                 training_results = self.training_retriever.retrieve(query)
-                span.set_outputs({
-                    "num_results": len(training_results),
-                    "results": [
-                        {
-                            "text": node.node.get_content()[:200],
-                            "score": float(node.score) if node.score else None,
-                            "metadata": node.node.metadata,
-                        }
-                        for node in training_results[:5]
-                    ]
-                })
+                training_results = self._deduplicate_by_content(training_results)
+                span.set_outputs([
+                    Document(page_content=node.node.get_content(), metadata=node.node.metadata)
+                    for node in training_results
+                ])
             logger.debug(f"  ✓ Retrieved {len(training_results)} training results")
             
             for node_with_score in training_results:
@@ -510,13 +517,11 @@ class MultiRetrieverOrchestrator:
                     max_results=self.web_top_k,
                     return_list=True
                 )
-                span.set_outputs({
-                    "num_results": len(web_results) if web_results else 0,
-                    "results": [
-                        {"text": text[:200]}
-                        for text in (web_results[:5] if web_results else [])
-                    ]
-                })
+                web_results = list(set(web_results))
+                span.set_outputs([
+                    Document(page_content=text, metadata={"source": "web"})
+                    for text in web_results
+                ])
             
             if web_results:
                 logger.debug(f"  ✓ Retrieved {len(web_results)} web results")
@@ -539,102 +544,30 @@ class MultiRetrieverOrchestrator:
             else:
                 logger.debug(f"  No web results found")
         
-        # Deduplicate by node_id
-        seen = set()
-        unique_results = []
-        for node_with_score in all_results:
-            if node_with_score.node.node_id not in seen:
-                seen.add(node_with_score.node.node_id)
-                unique_results.append(node_with_score)
-        
-        logger.debug(f"[Fusion] Union: {len(all_results)} → {len(unique_results)} unique results")
         
         # Log source statistics
         multi_source_count = sum(1 for sources in source_tracking.values() if len(sources) > 1)
         logger.debug(f"  Multi-source matches: {multi_source_count}")
         
-        # Rerank if enabled
-        if self.reranker and unique_results:
-            logger.debug(f"[Reranking] Cross-Encoder (top-{self.reranker_top_k})...")
-            logger.debug(f"  Reranking {len(unique_results)} candidates...")
-            
-            with mlflow.start_span(name="reranking", span_type="RETRIEVER") as span:
-                span.set_inputs({"query": query, "num_candidates": len(unique_results), "top_k": self.reranker_top_k})
-                reranked_results = self.reranker.postprocess_nodes(
-                    unique_results,
-                    query_str=query,
-                )
-                span.set_outputs({
-                    "num_results": len(reranked_results),
-                    "results": [
-                        {
-                            "text": node.node.get_content()[:200],
-                            "score": float(node.score) if node.score else None,
-                            "metadata": node.node.metadata,
-                        }
-                        for node in reranked_results
-                    ]
-                })
-            
-            # Convert numpy float32 scores to Python float to avoid Pydantic warnings
-            for node_with_score in reranked_results:
-                if node_with_score.score is not None:
-                    node_with_score.score = float(node_with_score.score)
-            
-            logger.debug(f"  ✓ Reranked → {len(reranked_results)} final results")
-            
-            if reranked_results:
-                logger.debug(f"    Top rerank score: {reranked_results[0].score:.4f}")
-                logger.debug(f"    Bottom rerank score: {reranked_results[-1].score:.4f}")
-            
-            final_results = reranked_results
-        else:
-            final_results = unique_results[:self.reranker_top_k]
-
-        # Reserve the first two slots for training-index results (if enabled).
-        # This protects short-but-useful training nodes from being filtered out
-        # when mixed with much longer wiki/web nodes.
-        if self.training_retriever and training_results:
-            reserved_training_ids: List[str] = []
-            seen_training = set()
-            for nws in training_results:
-                nid = nws.node.node_id
-                if nid in seen_training:
-                    continue
-                seen_training.add(nid)
-                reserved_training_ids.append(nid)
-                if len(reserved_training_ids) >= 2:
-                    break
-
-            if reserved_training_ids:
-                final_by_id = {nws.node.node_id: nws for nws in final_results}
-                reserved_training = [
-                    final_by_id.get(nid, next((n for n in training_results if n.node.node_id == nid), None))
-                    for nid in reserved_training_ids
-                ]
-                reserved_training = [n for n in reserved_training if n is not None]
-
-                reserved_set = set(reserved_training_ids)
-                remainder = [nws for nws in final_results if nws.node.node_id not in reserved_set]
-                final_results = (reserved_training + remainder)[: self.reranker_top_k]
+        # Deduplicate all results by node_id
+        logger.debug(f"Deduplicating total of {len(all_results)} results...")
+        final_results = self._deduplicate(all_results)
         
         logger.debug("="*60)
         logger.debug(f"✓ Final: {len(final_results)} results")
         logger.debug("="*60)
         
-        # Optionally attach source metadata
-        if return_sources:
-            for node_with_score in final_results:
-                node_id = node_with_score.node.node_id
-                sources = source_tracking.get(node_id, [])
-                node_with_score.node.metadata["retrieval_sources"] = sources
+        # attach source metadata
+        for node_with_score in final_results:
+            node_id = node_with_score.node.node_id
+            sources = source_tracking.get(node_id, [])
+            node_with_score.node.metadata["retrieval_sources"] = sources
         
         return final_results
     
     def retrieve_batch(
         self,
         queries: List[str],
-        deduplicate: bool = True,
         include_options_in_web_query: bool = False,
         options: Optional[Dict[str, str]] = None,
     ) -> List[NodeWithScore]:
@@ -662,84 +595,20 @@ class MultiRetrieverOrchestrator:
             )
             all_results.extend(results)
         
-        if deduplicate:
-            seen = set()
-            unique_results = []
-            
-            # Track source statistics for deduplication logging
-            source_counts = defaultdict(int)
-            deduplicated_counts = defaultdict(int)
-            
-            for node_with_score in all_results:
-                # Track source before deduplication
-                source = node_with_score.node.metadata.get("source", "unknown")
-                source_counts[source] += 1
-                
-                if node_with_score.node.node_id not in seen:
-                    seen.add(node_with_score.node.node_id)
-                    unique_results.append(node_with_score)
-                else:
-                    # Track what got deduplicated
-                    deduplicated_counts[source] += 1
-            
-            logger.debug(
-                f"\nBatch deduplication: {len(all_results)} → {len(unique_results)} unique"
-            )
-            
-            # Log per-source deduplication stats
-            for source in sorted(source_counts.keys()):
-                total = source_counts[source]
-                deduped = deduplicated_counts.get(source, 0)
-                unique = total - deduped
-                if deduped > 0:
-                    logger.debug(f"  {source}: {total} → {unique} unique ({deduped} duplicates removed)")
-            
-            return unique_results
+        len_before = len(all_results)
+
+        all_results = self._deduplicate(all_results)
         
-        return all_results
-    
-    def retrieve_texts(
-        self,
-        query: str,
-        include_metadata: bool = False,
-        include_options_in_web_query: bool = False,
-        options: Optional[Dict[str, str]] = None,
-    ) -> List[str]:
-        """
-        Retrieve and return text content only.
-        
-        Args:
-            query: Search query
-            include_metadata: Include metadata in returned text
-            include_options_in_web_query: If True and web search enabled, append options to query
-            options: Options to include in web query (if include_options_in_web_query=True)
-            
-        Returns:
-            List of text strings
-        """
-        results = self.retrieve(
-            query,
-            return_sources=True,
-            include_options_in_web_query=include_options_in_web_query,
-            options=options
+        logger.debug(
+            f"\nBatch deduplication: {len_before} → {len(all_results)} unique"
         )
         
-        texts = []
-        for node_with_score in results:
-            text = node_with_score.node.get_content()
-            
-            if include_metadata:
-                metadata = node_with_score.node.metadata
-                text = f"[{metadata.get('source', 'unknown')}] {text}"
-            
-            texts.append(text)
-        
-        return texts
+        return all_results
+
     
     def retrieve_texts_batch(
         self,
         queries: List[str],
-        deduplicate: bool = True,
         include_metadata: bool = False,
         include_options_in_web_query: bool = False,
         options: Optional[Dict[str, str]] = None,
@@ -759,7 +628,6 @@ class MultiRetrieverOrchestrator:
         """
         results = self.retrieve_batch(
             queries,
-            deduplicate=deduplicate,
             include_options_in_web_query=include_options_in_web_query,
             options=options
         )

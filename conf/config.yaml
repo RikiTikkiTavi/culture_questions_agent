@@ -148,7 +148,7 @@ retrieval:
   
   # Training data retrieval (NEW)
   use_training_retrieval: true  # Enable retrieval from training data index during inference
-  training_top_k: 4  # Number of results from training data retrieval
+  training_top_k: 10  # Number of results from training data retrieval
   
   # Multi-retriever configuration
   use_colbert: true    # Late-interaction retrieval (PRIMARY)
@@ -159,16 +159,20 @@ retrieval:
   
   # ColBERT settings (late-interaction retrieval)
   colbert_model: "colbert-ir/colbertv2.0"  # ColBERT v2
-  colbert_top_k: 5  # Number of results from ColBERT
+  colbert_top_k: 25  # Number of results from ColBERT
   
   # Dense retrieval settings (BGE-M3)
-  hybrid_dense_top_k: 10  # Number of results from dense retrieval
+  hybrid_dense_top_k: 25  # Number of results from dense retrieval
   
   # Sparse retrieval settings (BM25)
-  hybrid_sparse_top_k: 10  # Number of results from BM25
+  hybrid_sparse_top_k: 25  # Number of results from BM25
   
   # Reranking settings (cross-encoder)
-  reranker_top_k: 4  # Final number of results after reranking
+  reranking_groups:
+    - sources: ["colbert", "dense", "sparse"]
+      top_k: 4
+    - sources: ["training"]
+      top_k: 4
   
   # Legacy settings (for backward compatibility with existing code)
   # Query generation
@@ -202,3 +206,13 @@ mlflow:
 # Inference/Competition submission paths
 test_mcq_path: "data/test_dataset_mcq.csv"
 submission_output_path: "data/mcq_prediction.tsv"
+
+# Inference optimization settings
+inference:
+  max_concurrent: 8  # Maximum concurrent predictions (adjust based on GPU memory)
+  # Recommended values:
+  # - H100 80GB: 12-16
+  # - H100 40GB: 8-12
+  # - A100 80GB: 10-14
+  # - A100 40GB: 6-10
+  # - V100 32GB: 4-6
