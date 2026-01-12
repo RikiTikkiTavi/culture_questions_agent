@@ -34,6 +34,15 @@ ddgs = "^9.10.0"
 sentence-transformers = "^3.0.0"  # For semantic splitting and reranking
 faiss-cpu = "^1.9.0"  # Optional: for efficient similarity search (use faiss-gpu on H100)
 # faiss-gpu = "^1.9.0"  # Uncomment for GPU-accelerated FAISS
+llama-index-postprocessor-flag-embedding-reranker = "^0.4.1"
+llama-index-indices-managed-colbert = "^0.5.1"
+colbert-ai = "^0.2.22"
+flagembedding = "^1.3.5"
+llama-index-vector-stores-qdrant = "^0.9.0"
+trafilatura = "^2.0.0"
+llama-index-readers-web = "^0.5.6"
+llama-index-vector-stores-faiss = "^0.5.2"
+llama-index-vector-stores-lancedb = "^0.4.4"
 
 [build-system]
 requires = ["poetry-core>=1.0.0"]

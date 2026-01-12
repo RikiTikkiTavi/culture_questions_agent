@@ -2,11 +2,13 @@
 
 from abc import ABC, abstractmethod
 from typing import Dict, Tuple
-
+from transformers import AutoModelForCausalLM, AutoTokenizer, StopStringCriteria, AutoModel
 
 class BasePredictor(ABC):
     """Abstract base class for answer prediction strategies."""
-    
+    model: object
+    tokenizer: object
+
     @abstractmethod
     def predict_best_option(
         self,

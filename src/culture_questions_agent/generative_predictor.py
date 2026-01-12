@@ -1,13 +1,14 @@
 """Generative LLM predictor using standard text generation."""
 
 import logging
+import re
 from typing import Dict, Tuple
 
 import mlflow
 import torch
 from jinja2 import Environment, FileSystemLoader
 from pathlib import Path
-from transformers import AutoModelForCausalLM, AutoTokenizer, StopStringCriteria
+from transformers import AutoModelForCausalLM, AutoTokenizer, StopStringCriteria, AutoModel
 
 from culture_questions_agent.base_predictor import BasePredictor
 
@@ -52,7 +53,7 @@ class GenerativePredictor(BasePredictor):
             cache_dir=cache_dir,
             device_map=device,
             dtype=torch.bfloat16
-        )
+        ) # type: ignore
         self.model.eval()
         
         self.max_new_tokens = max_new_tokens
@@ -62,7 +63,8 @@ class GenerativePredictor(BasePredictor):
         template_dir = Path(__file__).parent.parent.parent / "prompts"
         self.jinja_env = Environment(loader=FileSystemLoader(str(template_dir)))
         self.mcq_template = self.jinja_env.get_template("mcq_prompt.jinja")
-        
+        self.saq_template = self.jinja_env.get_template("saq_prompt.jinja")
+
         logger.info("✓ Generative Predictor initialized successfully")
     
     def generate_answer(self, prompt: str) -> str:
@@ -80,25 +82,25 @@ class GenerativePredictor(BasePredictor):
             prompt,
             return_tensors="pt",
             truncation=True,
-            max_length=2048
-        ).to(self.model.device)
+            max_length=16384
+        ).to(self.model.device) # type: ignore
         
         # Generate
         with torch.no_grad():
-            outputs = self.model.generate(
+            outputs = self.model.generate( # type: ignore
                 **inputs,
                 max_new_tokens=self.max_new_tokens,
                 temperature=self.temperature,
                 do_sample=self.temperature > 0,
-                pad_token_id=self.tokenizer.pad_token_id,
-                eos_token_id=self.tokenizer.eos_token_id,
+                pad_token_id=self.tokenizer.pad_token_id, # type: ignore
+                eos_token_id=self.tokenizer.eos_token_id, # type: ignore
                 stop_strings=["\nQuestion:"],
                 tokenizer=self.tokenizer,
             )
         
         # Decode only the generated part (skip the input prompt)
         generated_ids = outputs[0][inputs["input_ids"].shape[1]:]
-        generated_text = self.tokenizer.decode(generated_ids, skip_special_tokens=True)
+        generated_text = self.tokenizer.decode(generated_ids, skip_special_tokens=True) # type: ignore
         generated_text = generated_text.replace("\nQuestion:", "")
 
         return generated_text.strip()
@@ -109,7 +111,7 @@ class GenerativePredictor(BasePredictor):
         options: Dict[str, str],
         option_contexts: Dict[str, str],
         question_contexts: list[str]
-    ) -> Tuple[str, Dict[str, float]]:
+    ) -> str:
         """
         Predict the best option using standard text generation.
         
@@ -159,32 +161,103 @@ class GenerativePredictor(BasePredictor):
                 gen_span.set_inputs({"prompt": prompt})
                 
                 # Generate answer
-                generated = self.generate_answer(prompt)
+                # Tokenize
+                inputs = self.tokenizer(
+                    prompt,
+                    return_tensors="pt",
+                    truncation=True,
+                    max_length=16384
+                ).to(self.model.device) # type: ignore
+                
+                # Generate
+                with torch.no_grad():
+                    # Peak into logits, find "A", "B", "C, "D" tokens, select highest
+                    logits = self.model(**inputs).logits # type: ignore
+                    option_tokens = {opt: self.tokenizer.encode(opt, add_special_tokens=False)[0] for opt in options.keys()} # type: ignore
+                    last_token_logits = logits[0, -1]
+                    best_option = max(option_tokens.keys(), key=lambda opt: last_token_logits[option_tokens[opt]].item())
 
-                gen_span.set_outputs({"generated_text": generated})
+                    gen_span.set_outputs({"generated_text": best_option})
 
-            
-            # Parse the generated answer to extract option key
-            # Look for single letter A/B/C/D in the response
-            generated_upper = generated.upper()
-            best_option = None
-            
-            # First try to find exact option key
-            for opt_key in options.keys():
-                if opt_key in generated_upper:
-                    best_option = opt_key
-                    break
-            
-            # If not found, default to first option
-            if best_option is None:
-                logger.warning(f"Could not parse option from generated text: '{generated}', defaulting to first option")
-                best_option = list(options.keys())[0]
-            
-            # Create dummy scores (1.0 for selected, 0.0 for others)
-            scores = {opt_key: 1.0 if opt_key == best_option else 0.0 for opt_key in options.keys()}
-            
-            span.set_outputs({"predicted_option": best_option, "generated_text": generated})
+            span.set_outputs({"predicted_option": best_option})
             
             logger.info(f"✓ Selected option {best_option}")
         
-        return best_option, scores
+        return best_option
+
+    def predict_short_answer(
+        self,
+        question: str,
+        question_contexts: list[str]
+    ) -> str:
+        """
+        Predict short answer using standard text generation.
+        
+        Args:
+            question: The question text
+            question_contexts: List of context texts for the question
+            
+        Returns:
+            Generated short answer
+        """
+        logger.info("Generating short answer using generative prediction...")
+        
+        with mlflow.start_span(name="predict_short_answer") as span:
+            span.set_inputs({
+                "question": question,
+                "question_contexts": question_contexts,
+            })
+            
+            # Build formatted context sections
+            context_parts = []
+            
+            # Add question contexts (numbered)
+            if question_contexts:
+                for i, ctx in enumerate(question_contexts, 1):
+                    if ctx.strip():
+                        context_parts.append(f"[{i}] {ctx.strip()}")
+            
+            with mlflow.start_span(name="generate_answer", span_type="LLM") as gen_span:
+                # Render prompt from template
+                prompt = self.saq_template.render(
+                    context_parts=context_parts,
+                    question=question,
+                )
+                gen_span.set_inputs({"prompt": prompt})
+                
+                # Generate answer
+                inputs = self.tokenizer(
+                    prompt,
+                    return_tensors="pt",
+                    truncation=True,
+                    max_length=16384,
+                ).to(self.model.device) # type: ignore
+                
+                # Generate
+                with torch.no_grad():
+                    outputs = self.model.generate( # type: ignore
+                        **inputs,
+                        max_new_tokens=10,
+                        temperature=0.0,
+                        do_sample=False,
+                        pad_token_id=self.tokenizer.pad_token_id, # type: ignore
+                        eos_token_id=self.tokenizer.eos_token_id, # type: ignore
+                        tokenizer=self.tokenizer,
+                    )
+                
+                # Decode only the generated part (skip the input prompt)
+                generated_ids = outputs[0][inputs["input_ids"].shape[1]:]
+                generated_text = self.tokenizer.decode(generated_ids, skip_special_tokens=True) # type: ignore
+                # Find the text in "" using regex
+                
+                match = re.search(r'"(.*?)"', generated_text)
+                if match:
+                    generated_text = match.group(1)
+                else:
+                    generated_text = generated_text.strip()
+                
+                generated_text = generated_text.replace('"', '').replace("“", "").replace("”", "").replace("'", "")
+
+                gen_span.set_outputs({"generated_answer": generated_text})
+        
+        return generated_text

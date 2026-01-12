@@ -2,15 +2,20 @@
 import logging
 from typing import List, Optional
 from llama_index.tools.wikipedia import WikipediaToolSpec
+from llama_index.core.retrievers import BaseRetriever
+from llama_index.core.schema import NodeWithScore, TextNode, QueryBundle
 from ddgs.ddgs import DDGS
 
 logger = logging.getLogger(__name__)
 
 
-class SearchEngine:
-    """Search engine using Wikipedia and DDGS (multi-engine web search) as fallback."""
+class SearchEngine(BaseRetriever):
+    """Search engine using Wikipedia and DDGS (multi-engine web search) as fallback.
     
-    def __init__(self, max_chars: int = 2500, include_title: bool = True, ddgs_backend: str = "yandex,yahoo,wikipedia,grokipedia"):
+    Implements BaseRetriever interface for consistent integration with llama-index.
+    """
+    
+    def __init__(self, max_chars: int = 2500, include_title: bool = True, ddgs_backend: str = "yandex,yahoo,wikipedia,grokipedia", similarity_top_k: int = 3):
         """
         Initialize search tools.
         
@@ -18,14 +23,18 @@ class SearchEngine:
             max_chars: Maximum characters to keep from search results
             include_title: Whether to include titles in search snippets
             ddgs_backend: Comma-separated list of DDGS backends to use
+            similarity_top_k: Maximum number of web search results to return
         """
+        super().__init__()
         logger.info("Initializing search tools...")
         self.max_chars = max_chars
         self.include_title = include_title
         self.ddgs_backend = ddgs_backend
+        self.similarity_top_k = similarity_top_k
         logger.info(f"  Max search result length: {max_chars} chars")
         logger.info(f"  Include titles in snippets: {include_title}")
         logger.info(f"  DDGS backends: {ddgs_backend}")
+        logger.info(f"  Top-k results: {similarity_top_k}")
         
         # Wikipedia search (primary)
         self.wikipedia_tool = WikipediaToolSpec()
@@ -118,6 +127,46 @@ class SearchEngine:
             logger.debug(f"DDGS search failed: {e}")
         
         return [] if return_list else ""
+    
+    def _retrieve(self, query_bundle: QueryBundle) -> List[NodeWithScore]:
+        """
+        Retrieve nodes using web search (required by BaseRetriever).
+        
+        Args:
+            query_bundle: Query bundle containing the search query
+            
+        Returns:
+            List of NodeWithScore objects
+        """
+        query_str = query_bundle.query_str
+        logger.debug(f"Web retrieval for: '{query_str}'")
+        
+        # # Try Wikipedia first
+        # wiki_result = self.search_wikipedia(query_str)
+        # if wiki_result:
+        #     node = TextNode(
+        #         text=wiki_result,
+        #         metadata={"source": "wikipedia", "query": query_str}
+        #     )
+        #     return [NodeWithScore(node=node, score=1.0)]
+        
+        # # Fallback to DDGS web search
+        # logger.debug("Falling back to DDGS web search...")
+        web_snippets = self.search_web(query_str, max_results=self.similarity_top_k, return_list=True)
+        
+        if isinstance(web_snippets, list) and web_snippets:
+            nodes = []
+            for i, snippet in enumerate(web_snippets):
+                node = TextNode(
+                    text=snippet,
+                    metadata={"source": "web", "query": query_str, "rank": i}
+                )
+                # Score decreases with rank
+                score = 1.0 / (i + 1)
+                nodes.append(NodeWithScore(node=node, score=score))
+            return nodes
+        
+        return []
     
     def search(self, query: str, max_results: int = 3) -> str:
         """

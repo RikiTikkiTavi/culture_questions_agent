@@ -2,7 +2,8 @@
 
 import logging
 import os
-from typing import Dict
+from pathlib import Path
+from typing import Dict, Optional, Union
 
 import mlflow
 from llama_index.core.workflow import (
@@ -12,13 +13,17 @@ from llama_index.core.workflow import (
     Workflow,
     step,
 )
+from llama_index.core import VectorStoreIndex, StorageContext, load_index_from_storage, Settings
+from llama_index.embeddings.huggingface import HuggingFaceEmbedding
+from llama_index.postprocessor.flag_embedding_reranker import FlagEmbeddingReranker
+from llama_index.core.schema import TextNode, NodeWithScore
 
-from culture_questions_agent.structures import MCQQuestion
+from culture_questions_agent.structures import MCQQuestion, SAQQuestion
 from culture_questions_agent.query_generator import QueryGenerator
 from culture_questions_agent.search_tools import SearchEngine
 from culture_questions_agent.predictor_factory import PredictorFactory
-from culture_questions_agent.reranker import Reranker
 from culture_questions_agent.multi_retriever import MultiRetrieverOrchestrator
+from culture_questions_agent.colbert_retriever import ColBERTRetriever
 
 from mlflow.entities import Document
 
@@ -30,24 +35,36 @@ class QueryGenerationEvent(Event):
 
     question: str
     question_queries: list[str]  # Queries for question context
-    options: Dict[str, str]
+    options: Optional[Dict[str, str]]  # None for SAQ questions
+    is_mcq: bool  # True for MCQ, False for SAQ
+
+
+class RetrievalEvent(Event):
+    """Event carrying raw retrieved documents before reranking."""
+
+    question: str
+    options: Optional[Dict[str, str]]  # None for SAQ questions
+    raw_documents: list[NodeWithScore]  # List of NodeWithScore from retrieval
+    is_mcq: bool  # True for MCQ, False for SAQ
 
 
 class CombinedRetrievalEvent(Event):
     """Event carrying combined and reranked results."""
 
     question: str
-    options: Dict[str, str]
+    options: Optional[Dict[str, str]]  # None for SAQ questions
     question_context: list[str]  # Final combined context
+    is_mcq: bool  # True for MCQ, False for SAQ
 
 
 class SearchEvent(Event):
     """Event carrying search results for question and each option."""
 
     question: str
-    options: Dict[str, str]
+    options: Optional[Dict[str, str]]  # None for SAQ questions
     question_context: list[str]  # Search result for question
-    option_contexts: Dict[str, str]  # option_key -> search result text
+    option_contexts: Optional[Dict[str, str]]  # option_key -> search result text, None for SAQ
+    is_mcq: bool  # True for MCQ, False for SAQ
 
 
 class CulturalQAWorkflow(Workflow):
@@ -74,12 +91,20 @@ class CulturalQAWorkflow(Workflow):
         )
         logger.info("=" * 80)
 
-        # Set cache directory
+        # Set cache directories for all HuggingFace components
         os.environ["HF_HOME"] = cfg.model.cache_dir
+        os.environ["HUGGINGFACE_HUB_CACHE"] = cfg.model.cache_dir
+        os.environ["TRANSFORMERS_CACHE"] = cfg.model.cache_dir
+        os.environ["HF_DATASETS_CACHE"] = cfg.model.cache_dir
+        # For sentence-transformers (used by FlagEmbeddingReranker)
+        os.environ["SENTENCE_TRANSFORMERS_HOME"] = cfg.model.cache_dir
 
         # Get predictor type from config
         predictor_type = cfg.model.get("predictor_type", "discriminative")
         logger.info(f"Predictor type: {predictor_type}")
+        
+        # Store predictor type for validation
+        self.predictor_type = predictor_type
 
         # [1] Initialize Predictor using factory
         logger.info(
@@ -96,18 +121,9 @@ class CulturalQAWorkflow(Workflow):
 
         # [2] Initialize Query Generator (reuses the same model/tokenizer for discriminative)
         logger.info(f"[2/5] Initializing Query Generator")
-        if predictor_type == "discriminative":
-            # Reuse model/tokenizer from NLL predictor
-            logger.info(f"  Reusing model/tokenizer from NLL predictor")
-            self.query_generator = QueryGenerator(
-                model=self.predictor.model, tokenizer=self.predictor.tokenizer
-            )
-        else:
-            # For generative predictor, also reuse model/tokenizer
-            logger.info(f"  Reusing model/tokenizer from generative predictor")
-            self.query_generator = QueryGenerator(
-                model=self.predictor.model, tokenizer=self.predictor.tokenizer
-            )
+        self.query_generator = QueryGenerator(
+            model=self.predictor.model, tokenizer=self.predictor.tokenizer
+        )
 
         # [3] Initialize Search Engine
         logger.info(f"[3/5] Initializing Search Engine (Wikipedia + DDGS)")
@@ -117,59 +133,114 @@ class CulturalQAWorkflow(Workflow):
             ddgs_backend=cfg.retrieval.get(
                 "ddgs_backend", "yandex,yahoo,wikipedia,grokipedia"
             ),
+            similarity_top_k=cfg.retrieval.get("web_top_k", 5),
         )
 
         # [4] Initialize SOTA Multi-Retriever (ColBERT + Dense + Sparse + Training + Web)
-        # Reranking is disabled here - done once after combining all documents
         use_retrieval = cfg.retrieval.get("use_hybrid_retrieval", True)
         self.use_web = cfg.retrieval.get("use_web", False)
-        use_training = cfg.retrieval.get("use_training_retrieval", False)
 
         if use_retrieval:
-            logger.info(
-                f"[4/5] Initializing SOTA Multi-Retriever (ColBERT + Dense + Sparse + Training + Web)"
+            logger.info(f"[4/5] Initializing SOTA Multi-Retriever")
+            
+            # Load main index
+            logger.info(f"  Loading vector index from {cfg.vector_store.persist_dir}...")
+            embed_model = HuggingFaceEmbedding(
+                model_name=cfg.vector_store.embedding_model_name,
+                cache_folder=cfg.model.cache_dir,
             )
-            logger.info(
-                f"  Reranking disabled in orchestrator (will rerank combined results)"
-            )
-            logger.info(f"  Training data retrieval: {use_training}")
-            try:
-                self.retriever = MultiRetrieverOrchestrator.from_persist_dir(
-                    persist_dir=cfg.vector_store.persist_dir,
-                    embedding_model_name=cfg.vector_store.embedding_model_name,
-                    cache_dir=cfg.model.cache_dir,
+            Settings.embed_model = embed_model
+            
+            storage_context = StorageContext.from_defaults(persist_dir=cfg.vector_store.persist_dir)
+            index = load_index_from_storage(storage_context)
+            nodes = list(index.docstore.docs.values())
+            logger.info(f"  ✓ Loaded {len(nodes)} nodes")
+            
+            # Build list of retrievers based on config
+            retrievers = []
+            retriever_names = []
+
+            # Dense retriever
+            if cfg.retrieval.get("use_dense", True):
+                from llama_index.core.retrievers import VectorIndexRetriever
+                retrievers.append(VectorIndexRetriever(
+                    index=index,
+                    similarity_top_k=cfg.retrieval.get("hybrid_dense_top_k", 50),
+                ))
+                logger.info(f"  ✓ Dense retriever (top-{cfg.retrieval.get('hybrid_dense_top_k', 50)})")
+                retriever_names.append("dense")
+
+            # Sparse retriever
+            if cfg.retrieval.get("use_sparse", True):
+                from llama_index.retrievers.bm25 import BM25Retriever
+                retrievers.append(BM25Retriever.from_defaults(
+                    nodes=nodes,
+                    similarity_top_k=cfg.retrieval.get("hybrid_sparse_top_k", 50),
+                ))
+                logger.info(f"  ✓ Sparse retriever (top-{cfg.retrieval.get('hybrid_sparse_top_k', 50)})")
+                retriever_names.append("sparse")
+
+            # ColBERT retriever
+            if cfg.retrieval.get("use_colbert", True):
+                # Use full path from config (e.g., "storage/colbert_index/colbert_main")
+                # But only pass the index_name part ("colbert_main") to ColBERTRetriever
+                colbert_index_path = cfg.vector_store.get('colbert_index_path', 'storage/colbert_index/colbert_main')
+                # Extract just the index name (last component)
+                index_name = Path(colbert_index_path).name
+                retrievers.append(ColBERTRetriever(
+                    model_name=cfg.retrieval.get("colbert_model", "colbert-ir/colbertv2.0"),
+                    nodes=nodes,
+                    similarity_top_k=cfg.retrieval.get("colbert_top_k", 50),
                     device=cfg.retrieval.get("device", "cuda"),
-                    # Runtime behavior flags from config.yaml
-                    use_reranker=False,  # Disable reranking in orchestrator
-                    use_web=self.use_web,
-                    use_training=use_training,
-                    use_colbert=cfg.retrieval.get("use_colbert", True),
-                    use_dense=cfg.retrieval.get("use_dense", True),
-                    use_sparse=cfg.retrieval.get("use_sparse", True),
-                    # Paths from config.yaml
-                    training_persist_dir=cfg.vector_store.get("training_persist_dir"),
-                    # Model names from config.yaml
-                    colbert_model=cfg.retrieval.get(
-                        "colbert_model", "colbert-ir/colbertv2.0"
-                    ),
-                    reranker_model=cfg.model.get(
-                        "reranker_name", "BAAI/bge-reranker-v2-m3"
-                    ),
-                    # Top-k values from config.yaml
-                    dense_top_k=cfg.retrieval.get("hybrid_dense_top_k", 50),
-                    sparse_top_k=cfg.retrieval.get("hybrid_sparse_top_k", 50),
-                    colbert_top_k=cfg.retrieval.get("colbert_top_k", 50),
-                    training_top_k=cfg.retrieval.get("training_top_k", 10),
-                    reranker_top_k=cfg.retrieval.get("reranker_top_k", 10),
-                    # Web search engine
-                    search_engine=self.search_engine if self.use_web else None,
-                )
-            except FileNotFoundError as e:
-                logger.warning(f"SOTA retriever initialization failed: {e}")
-                logger.warning(
-                    "Continuing without retrieval. Run builder.py to create the index."
-                )
-                self.retriever = None
+                    cache_dir=cfg.model.cache_dir,
+                    index_path=index_name,
+                ))
+                retriever_names.append("colbert_main")
+                logger.info(f"  ✓ ColBERT retriever (top-{cfg.retrieval.get('colbert_top_k', 50)})")
+            
+            # Training retrievers
+            if cfg.retrieval.get("use_training_retrieval", False):
+                training_persist_dir = cfg.vector_store.get("training_persist_dir")
+                logger.info(f"  Loading training index from {training_persist_dir}...")
+                
+                training_storage_context = StorageContext.from_defaults(persist_dir=training_persist_dir)
+                training_index = load_index_from_storage(training_storage_context)
+                training_nodes = list(training_index.docstore.docs.values())
+                logger.info(f"  ✓ Loaded training index with {len(training_nodes)} nodes")
+                
+                # Training dense retriever
+                from llama_index.core.retrievers import VectorIndexRetriever
+                retrievers.append(VectorIndexRetriever(
+                    index=training_index,
+                    similarity_top_k=cfg.retrieval.get("training_top_k", 10),
+                ))
+                logger.info(f"  ✓ Training Dense retriever (top-{cfg.retrieval.get('training_top_k', 10)})")
+                retriever_names.append("dense_training")
+
+                # Training ColBERT retriever
+                if cfg.retrieval.get("use_training_colbert", True):
+                    # Use full path from config, extract index name
+                    training_colbert_index_path = cfg.vector_store.get('training_colbert_index_path', 'storage/colbert_index/colbert_training')
+                    index_name = Path(training_colbert_index_path).name
+                    retrievers.append(ColBERTRetriever(
+                        model_name=cfg.retrieval.get("colbert_model", "colbert-ir/colbertv2.0"),
+                        nodes=training_nodes,
+                        similarity_top_k=cfg.retrieval.get("training_colbert_top_k", 10),
+                        device=cfg.retrieval.get("device", "cuda"),
+                        cache_dir=cfg.model.cache_dir,
+                        index_path="storage/colbert_index_training",  # Use separate index path for training
+                    ))
+                    logger.info(f"  ✓ Training ColBERT retriever (top-{cfg.retrieval.get('training_colbert_top_k', 10)})")
+                    retriever_names.append("colbert_training")
+            
+            # Web search retriever
+            if self.use_web:
+                retrievers.append(self.search_engine)
+                logger.info(f"  ✓ Web search retriever (top-{cfg.retrieval.get('web_top_k', 5)})")
+                retriever_names.append("web")
+            
+            # Create orchestrator
+            self.retriever = MultiRetrieverOrchestrator(retrievers=retrievers)
         else:
             logger.info(f"[4/5] Local retrieval disabled")
             self.retriever = None
@@ -180,11 +251,12 @@ class CulturalQAWorkflow(Workflow):
 
         if self.use_reranker:
             logger.info(
-                f"[5/5] Initializing Combined Results Reranker: {cfg.model.get('reranker_name', 'BAAI/bge-reranker-v2-m3')}"
+                f"[5/5] Initializing FlagEmbeddingReranker: {cfg.model.get('reranker_name', 'BAAI/bge-reranker-v2-m3')}"
             )
-            self.reranker = Reranker(
-                model_name=cfg.model.get("reranker_name", "BAAI/bge-reranker-v2-m3"),
-                cache_dir=cfg.model.cache_dir,
+            # Note: cache_dir is set globally via HF_HOME environment variable above
+            self.reranker = FlagEmbeddingReranker(
+                model=cfg.model.get("reranker_name", "BAAI/bge-reranker-v2-m3"),
+                top_n=10,  # Default, will be overridden per rerank call
             )
         else:
             logger.info(f"[5/5] Reranker disabled for combined results")
@@ -201,22 +273,38 @@ class CulturalQAWorkflow(Workflow):
         """
         Generate search queries for dual-path retrieval.
         Path 1: Question context queries (LLM-generated)
-        Path 2: Option verification queries (rule-based)
+        Path 2: Option verification queries (rule-based, MCQ only)
 
         Args:
-            ev: StartEvent containing MCQ question
+            ev: StartEvent containing question field with Union[MCQQuestion, SAQQuestion]
 
         Returns:
             QueryGenerationEvent with generated queries
         """
-        mcq_question = ev.get("mcq_question")
-        if not mcq_question:
-            raise ValueError("mcq_question required")
+        # Get the question and determine its type
+        question_obj: Union[MCQQuestion, SAQQuestion] = ev.get("question")
+        if not question_obj:
+            raise ValueError("question field is required in StartEvent")
+        
+        # Check question type
+        if isinstance(question_obj, MCQQuestion):
+            is_mcq = True
+            options = question_obj.options
+        elif isinstance(question_obj, SAQQuestion):
+            is_mcq = False
+            options = None
+            # Validate that SAQ uses generative predictor
+            if self.predictor_type != "generative":
+                raise ValueError(
+                    f"SAQ questions require generative predictor, but {self.predictor_type} is configured"
+                )
+        else:
+            raise TypeError(f"question must be MCQQuestion or SAQQuestion, got {type(question_obj)}")
 
-        question = mcq_question.question
-        options = mcq_question.options
-
-        logger.info(f"🧠 Dual-Path Query Generation for: '{question}'")
+        question = question_obj.question
+        
+        question_type = "MCQ" if is_mcq else "SAQ"
+        logger.info(f"🧠 Query Generation for {question_type}: '{question}'")
         logger.info(f"  Path 1: Generating context queries for question...")
 
         # Path 1: Generate queries or use direct question based on config
@@ -231,18 +319,27 @@ class CulturalQAWorkflow(Workflow):
             question_queries = self.query_generator.generate_queries(
                 question, num_queries=self.cfg.retrieval.get("num_queries", 3)
             )
+        if self.cfg.retrieval.get("add_question_to_queries", True):
+            question_queries.append(question)
 
         logger.info(f"  ✓ Generated {len(question_queries)} question queries")
-        logger.info(f"  Path 2: Planning option verification queries...")
+        
+        if is_mcq:
+            logger.info(f"  Path 2: Planning option verification queries...")
+        else:
+            logger.info(f"  Path 2: Skipped (SAQ has no options)")
 
         return QueryGenerationEvent(
-            question=question, question_queries=question_queries, options=options
+            question=question, 
+            question_queries=question_queries, 
+            options=options,
+            is_mcq=is_mcq
         )
 
     @step
     async def retrieve_documents(
         self, ev: QueryGenerationEvent
-    ) -> CombinedRetrievalEvent:
+    ) -> RetrievalEvent:
         """
         Retrieve documents from local index and web using SOTA multi-retriever orchestrator.
 
@@ -250,9 +347,9 @@ class CulturalQAWorkflow(Workflow):
             ev: QueryGenerationEvent with question queries
 
         Returns:
-            CombinedRetrievalEvent with retrieved and combined results
+            RetrievalEvent with raw retrieved documents
         """
-        logger.info(f"📚 [Step 1/3] Multi-Source Document Retrieval (Local + Web)")
+        logger.info(f"📚 [Step 1/4] Multi-Source Document Retrieval (Local + Web)")
 
         all_docs = []
 
@@ -261,16 +358,8 @@ class CulturalQAWorkflow(Workflow):
                 f"  SOTA Multi-Retrieval (ColBERT + Dense + Sparse + Web) with orchestration"
             )
 
-            # Check if we should include options in web query
-            include_options = self.cfg.retrieval.get("include_options_in_query", True)
-
             # Retrieve from all sources using orchestrator
-            # retrieve_texts_batch returns list of text strings from top nodes
-            all_docs = self.retriever.retrieve_batch(
-                ev.question_queries,
-                include_options_in_web_query=include_options,
-                options=ev.options if include_options else None,
-            )
+            all_docs = self.retriever.retrieve_batch(ev.question_queries)
 
             if all_docs:
                 logger.info(f"  ✓ Retrieved {len(all_docs)} documents from all sources")
@@ -279,9 +368,32 @@ class CulturalQAWorkflow(Workflow):
         else:
             logger.info(f"  Multi-retrieval disabled or unavailable")
 
-        if self.use_reranker and all_docs and self.reranker:
-            context_snippets = []
+        return RetrievalEvent(
+            question=ev.question,
+            options=ev.options,
+            raw_documents=all_docs,
+            is_mcq=ev.is_mcq,
+        )
 
+    @step
+    async def rerank_documents(
+        self, ev: RetrievalEvent
+    ) -> CombinedRetrievalEvent:
+        """
+        Rerank retrieved documents using cross-encoder reranker.
+
+        Args:
+            ev: RetrievalEvent with raw retrieved documents
+
+        Returns:
+            CombinedRetrievalEvent with reranked context snippets
+        """
+        logger.info(f"🔄 [Step 2/4] Document Reranking")
+
+        all_docs = ev.raw_documents
+        context_snippets = []
+
+        if self.use_reranker and all_docs and self.reranker:
             # Rerank in groups based on config
             for group_cfg in self.cfg.retrieval.get("reranking_groups", []):
                 sources = group_cfg.get("sources", [])
@@ -292,7 +404,7 @@ class CulturalQAWorkflow(Workflow):
                     node_with_score.node.get_content()
                     for node_with_score in all_docs
                     if any(
-                        source in node_with_score.node.metadata["retrieval_sources"]
+                        source == node_with_score.metadata["source"]
                         for source in sources
                     )
                 ]
@@ -311,12 +423,17 @@ class CulturalQAWorkflow(Workflow):
                                 for i in range(len(group_docs))
                             ]
                         )
-                        reranked = self.reranker.rerank(
-                            query=ev.question, documents=group_docs, top_k=top_k
-                        )
-                        # Extract just the documents from reranked results
-                        selected_docs = [doc for _, doc, _ in reranked]
-                        scores = [score for score, _, _ in reranked]
+                        # Convert documents to nodes for reranking
+                        nodes = [
+                            NodeWithScore(node=TextNode(text=doc), score=0.0)
+                            for doc in group_docs
+                        ]
+                        # Rerank all nodes and slice to top_k (thread-safe - no state mutation)
+                        reranked_nodes = self.reranker.postprocess_nodes(nodes, query_str=ev.question)
+                        
+                        # Extract documents and scores
+                        selected_docs = [node.node.get_content() for node in reranked_nodes]
+                        scores = [node.score for node in reranked_nodes]
                         logger.info(
                             f"  ✓ Selected top {len(selected_docs)} snippets after reranking for group"
                         )
@@ -344,13 +461,16 @@ class CulturalQAWorkflow(Workflow):
             )
 
         return CombinedRetrievalEvent(
-            question=ev.question, options=ev.options, question_context=context_snippets
+            question=ev.question,
+            options=ev.options,
+            question_context=context_snippets,
+            is_mcq=ev.is_mcq,
         )
 
     @step
     async def verify_options(self, ev: CombinedRetrievalEvent) -> SearchEvent:
         """
-        Search for option definitions using Wikipedia.
+        Search for option definitions using Wikipedia (MCQ only).
 
         Args:
             ev: CombinedRetrievalEvent with question context
@@ -358,10 +478,21 @@ class CulturalQAWorkflow(Workflow):
         Returns:
             SearchEvent with complete search results
         """
-        logger.info(f"✅ [Step 2/3] Option Verification")
+        logger.info(f"✅ [Step 3/4] Option Verification")
 
         options_contexts = {}
         use_option_ctx = self.cfg.retrieval.get("use_option_context", True)
+        
+        # Skip option verification for SAQ questions
+        if not ev.is_mcq:
+            logger.info(f"  Skipping option verification for SAQ question")
+            return SearchEvent(
+                question=ev.question,
+                options=ev.options,
+                question_context=ev.question_context,
+                option_contexts=None,
+                is_mcq=ev.is_mcq,
+            )
 
         if use_option_ctx:
             logger.info(f"  Searching for option definitions on Wikipedia")
@@ -390,12 +521,13 @@ class CulturalQAWorkflow(Workflow):
             options=ev.options,
             question_context=ev.question_context,
             option_contexts=options_contexts,
+            is_mcq=ev.is_mcq,
         )
 
     @step
     async def predict_answer(self, ev: SearchEvent) -> StopEvent:
         """
-        Predict best option using the configured prediction strategy.
+        Predict best option (MCQ) or generate answer (SAQ) using the configured prediction strategy.
 
         Args:
             ev: SearchEvent with question context and option contexts
@@ -403,29 +535,31 @@ class CulturalQAWorkflow(Workflow):
         Returns:
             StopEvent with the final answer
         """
+        question_type = "MCQ" if ev.is_mcq else "SAQ"
         logger.info(
-            f"🎯 [Step 3/3] Predicting answer using {self.cfg.model.get('predictor_type', 'discriminative')} strategy..."
+            f"🎯 [Step 4/4] Predicting {question_type} answer using {self.cfg.model.get('predictor_type', 'discriminative')} strategy..."
         )
 
         # Get config flags for context enrichment
         use_question_ctx = self.cfg.retrieval.get("use_question_context", True)
-        use_option_ctx = self.cfg.retrieval.get("use_option_context", True)
-
-        logger.info(
-            f"  Context enrichment: question={use_question_ctx}, option={use_option_ctx}"
-        )
+        use_option_ctx = self.cfg.retrieval.get("use_option_context", True) and ev.is_mcq
 
         question_ctx = ev.question_context if use_question_ctx else [""]
-        option_ctx = ev.option_contexts if use_option_ctx else {}
+        option_ctx = ev.option_contexts if (use_option_ctx and ev.option_contexts) else {}
 
-        # Predict using configured predictor
-        best_option, scores = self.predictor.predict_best_option(
-            question=ev.question,
-            options=ev.options,
-            option_contexts=option_ctx,
-            question_contexts=question_ctx,
-        )
-
-        logger.info(f"  ✓ Selected: {best_option} - {ev.options[best_option]}")
-
-        return StopEvent(result=best_option)
+        if ev.is_mcq:
+            # MCQ: Predict using configured predictor
+            best_option = self.predictor.predict_best_option(
+                question=ev.question,
+                options=ev.options,
+                option_contexts=option_ctx,
+                question_contexts=question_ctx,
+            )
+            return StopEvent(result=best_option)
+        else:
+            # SAQ: Generate answer using generative predictor
+            answer = self.predictor.predict_short_answer(
+                question=ev.question,
+                question_contexts=question_ctx,
+            )
+            return StopEvent(result=answer)

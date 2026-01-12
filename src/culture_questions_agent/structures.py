@@ -16,9 +16,10 @@ class MCQQuestionTrain(MCQQuestion):
 
 @dataclass
 class SAQQuestion:
+    saq_id: str
+    pos_id: int
     question: str
 
 @dataclass
-class SAQQuestionTrain:
-    question: str
+class SAQQuestionTrain(SAQQuestion):
     answers: list[str]

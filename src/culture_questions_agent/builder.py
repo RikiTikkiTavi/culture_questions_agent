@@ -42,12 +42,8 @@ from culture_questions_agent.metadata_extractor import (
     MetadataExtractor,
     CulturalMetadata,
 )
-from culture_questions_agent.semantic_chunker import (
-    MultiGranularitySemanticChunker,
-    RerankerAlignedChunker,
-)
-from culture_questions_agent.colbert_retriever import ColBERTRetriever
-from culture_questions_agent.multi_retriever import MultiRetrieverOrchestrator
+from culture_questions_agent.colbert_retriever import build_colbert_index
+from llama_index.core.node_parser import SentenceSplitter
 
 logger = logging.getLogger(__name__)
 
@@ -502,7 +498,7 @@ def load_training_data_as_documents(
         
         for q in mcq_questions:
             # Format with only the question (no options), with answer
-            text = f"Question: {q.question}\nAnswer: {q.options[q.answer]}"
+            text = f"Answer to '{q.question}' is {q.options[q.answer]}."
             
             # Extract metadata from question
             metadata = metadata_extractor.extract_metadata_from_text(text)
@@ -535,7 +531,7 @@ def load_training_data_as_documents(
         saq_questions = read_saq_data_train(saq_path)
         
         for q in saq_questions:
-            text = f"Question: {q.question}\n\n Valid answers: {', '.join(q.answers)}"
+            text = f"Valid answers to '{q.question}' are {', '.join(q.answers)}."
             
             # Extract metadata from question/answer
             metadata = metadata_extractor.extract_metadata_from_text(text)
@@ -563,23 +559,23 @@ def load_training_data_as_documents(
     return documents
 
 
-def build_atlas(cfg) -> Tuple[VectorStoreIndex, MultiRetrieverOrchestrator]:
+def build_atlas(cfg) -> Optional[VectorStoreIndex]:
     """
     Build a SOTA VectorStoreIndex with multi-granularity semantic chunking,
-    rich metadata, and multi-retriever support (ColBERT + Dense + Sparse).
+    rich metadata, and ColBERT indexes.
     
     Pipeline:
     1. Load Wikipedia and Wikivoyage sections
     2. Extract rich metadata (country, culture_domain, etc.)
     3. Apply semantic chunking at multiple granularities
     4. Build vector index
-    5. Initialize multi-retriever orchestrator
+    5. Build ColBERT indexes
     
     Args:
         cfg: Hydra configuration object
         
     Returns:
-        Tuple of (VectorStoreIndex, MultiRetrieverOrchestrator)
+        VectorStoreIndex or None (if training-only mode)
     """
     logger.info("="*80)
     logger.info("SOTA CULTURAL KNOWLEDGE ATLAS BUILDER")
@@ -665,45 +661,29 @@ def build_atlas(cfg) -> Tuple[VectorStoreIndex, MultiRetrieverOrchestrator]:
     else:
         logger.info(f"\n⊗ No Wikipedia/Wikivoyage documents (building training index only)")
     
-    # [4] Apply multi-granularity semantic chunking
-    logger.info(f"\n[4/7] Multi-Granularity Semantic Chunking")
-    
-    # Get chunking strategy (needed for training index too)
-    chunking_strategy = cfg.vector_store.get('chunking_strategy', 'multi_granularity')
-    granularities = cfg.vector_store.get('granularities', ['small', 'medium', 'large'])
+    # [4] Apply text chunking
+    logger.info(f"\n[4/7] Text Chunking (SentenceSplitter)")
     
     # Skip chunking if no documents (training-only mode)
     if not all_documents:
         logger.info("  Skipped (no Wikipedia/Wikivoyage documents)")
         nodes = []
-    elif chunking_strategy == 'multi_granularity':
-        logger.info("  Strategy: Multi-Granularity Semantic Chunking")
-        
-        chunker = MultiGranularitySemanticChunker(
-            embedding_model_name=cfg.vector_store.embedding_model_name,
-            tokenizer_name=cfg.vector_store.get('tokenizer_name', 'BAAI/bge-m3'),
-            cache_dir=cfg.vector_store.cache_dir,
-            granularities=granularities,
-        )
-        
-        nodes = chunker.chunk_documents_multi_granularity(all_documents, granularities)
-        
-    elif chunking_strategy == 'reranker_aligned':
-        logger.info("  Strategy: Reranker-Aligned Chunking")
-        
-        chunker = RerankerAlignedChunker(
-            tokenizer_name=cfg.vector_store.get('tokenizer_name', 'BAAI/bge-m3'),
-            target_tokens=cfg.vector_store.get('target_tokens', 900),
-            max_tokens=cfg.vector_store.get('max_tokens', 1200),
-            cache_dir=cfg.vector_store.cache_dir,
-        )
-        
-        nodes = chunker.chunk_documents(all_documents)
-    
     else:
-        raise ValueError(f"Unknown chunking strategy: {chunking_strategy}")
-    
-    if all_documents:
+        # Get chunking parameters from config
+        chunk_size = cfg.vector_store.get('chunk_size', 512)
+        chunk_overlap = cfg.vector_store.get('chunk_overlap', 50)
+        
+        logger.info(f"  Chunk size: {chunk_size} tokens")
+        logger.info(f"  Chunk overlap: {chunk_overlap} tokens")
+        
+        # Create sentence splitter
+        node_parser = SentenceSplitter(
+            chunk_size=chunk_size,
+            chunk_overlap=chunk_overlap,
+        )
+        
+        # Parse documents into nodes
+        nodes = node_parser.get_nodes_from_documents(all_documents)
         logger.info(f"  ✓ Created {len(nodes)} chunks")
     
     # [5] Build vector index with batch embeddings
@@ -751,58 +731,34 @@ def build_atlas(cfg) -> Tuple[VectorStoreIndex, MultiRetrieverOrchestrator]:
     
     logger.info(f"  ✓ Extraction report saved: {report_path}")
     
-    # [7] Initialize multi-retriever orchestrator
-    logger.info(f"\n[7/7] Initializing Multi-Retriever Orchestrator")
+    # [7] Build ColBERT indexes
+    logger.info(f"\n[7/7] Building ColBERT Indexes")
     
-    # Skip orchestrator if no index (training-only mode)
+    # Skip ColBERT if no index (training-only mode)
     if index is None:
         logger.info("  Skipped (no main index, training-only mode)")
-        orchestrator = None
     else:
         use_colbert = cfg.retrieval.get('use_colbert', True)
-        use_dense = cfg.retrieval.get('use_dense', True)
-        use_sparse = cfg.retrieval.get('use_sparse', True)
-        use_reranker = cfg.retrieval.get('use_reranker', True)
         
-        # Initialize ColBERT if enabled
-        colbert_retriever = None
+        # Build ColBERT index if enabled
         if use_colbert:
-            colbert_index_path = persist_dir / "colbert_index.pkl"
+            # Just pass "colbert_main" - ColBERT will create storage/colbert_index/colbert_main
+            colbert_index_path = "colbert_main"
             
-            logger.info("  Building ColBERT retriever (this may take time on H100)...")
-            colbert_retriever = ColBERTRetriever(
-                model_name=cfg.retrieval.get('colbert_model', 'colbert-ir/colbertv2.0'),
+            logger.info("  Building ColBERT index (this may take time on H100)...")
+            logger.info(f"  Index name: {colbert_index_path}")
+            build_colbert_index(
                 nodes=cast(List[BaseNode], nodes),
-                similarity_top_k=cfg.retrieval.get('colbert_top_k', 50),
+                model_name=cfg.retrieval.get('colbert_model', 'colbert-ir/colbertv2.0'),
+                index_path="storage/colbert_index_main",
+                index_name="colbert_main",
                 device=cfg.retrieval.get('device', 'cuda'),
-                cache_dir=cfg.vector_store.cache_dir,
-                index_path=str(colbert_index_path),
+                max_query_length=cfg.retrieval.get('colbert_query_maxlen', 60),
+                max_doc_length=cfg.retrieval.get('colbert_doc_maxlen', 120),
             )
-        
-        # Build orchestrator
-        orchestrator = MultiRetrieverOrchestrator(
-            index=index,
-            nodes=cast(List[BaseNode], nodes),
-            colbert_retriever=colbert_retriever,
-            dense_top_k=cfg.retrieval.get('hybrid_dense_top_k', 50),
-            sparse_top_k=cfg.retrieval.get('hybrid_sparse_top_k', 50),
-            colbert_top_k=cfg.retrieval.get('colbert_top_k', 50),
-            reranker_model=cfg.model.get('reranker_name', 'BAAI/bge-reranker-v2-m3'),
-            reranker_top_k=cfg.retrieval.get('reranker_top_k', 10),
-            cache_dir=cfg.vector_store.cache_dir,
-            use_colbert=use_colbert,
-            use_dense=use_dense,
-            use_sparse=use_sparse,
-            use_reranker=use_reranker,
-        )
-        
-        # Save orchestrator stats
-        stats_path = persist_dir / "retriever_stats.json"
-        with open(stats_path, 'w') as f:
-            json.dump(orchestrator.get_retrieval_stats(), f, indent=2)
-        
-        logger.info(f"  ✓ Orchestrator config saved: {config_path}")
-        logger.info(f"  ✓ Retriever stats saved: {stats_path}")
+            logger.info(f"  ✓ ColBERT index built")
+        else:
+            logger.info("  Skipped (use_colbert=False)")
     
     # [8] Optional: Build training data index
     training_index = None
@@ -831,7 +787,7 @@ def build_atlas(cfg) -> Tuple[VectorStoreIndex, MultiRetrieverOrchestrator]:
             
             logger.info(f"  ✓ Created {len(training_nodes)} training nodes (1 per question)")
             
-            # Build training index
+            # Build training vector index
             logger.info("  Building training vector index...")
             training_base_nodes = cast(List[BaseNode], training_nodes)
             training_index = VectorStoreIndex(
@@ -847,11 +803,31 @@ def build_atlas(cfg) -> Tuple[VectorStoreIndex, MultiRetrieverOrchestrator]:
             logger.info(f"  Persisting training index to: {training_persist_dir}")
             training_index.storage_context.persist(persist_dir=str(training_persist_dir))
             
+            # Build ColBERT index for training data (if enabled)
+            use_training_colbert = cfg.retrieval.get('use_training_colbert', True)
+            if use_training_colbert:
+                logger.info("  Building ColBERT index for training data...")
+                # Just pass "colbert_training" - ColBERT will create storage/colbert_index/colbert_training
+                training_colbert_index_path = "colbert_training"
+                logger.info(f"  Index name: {training_colbert_index_path}")
+                
+                build_colbert_index(
+                    nodes=training_base_nodes,
+                    model_name=cfg.retrieval.get('colbert_model', 'colbert-ir/colbertv2.0'),
+                    index_path="storage/colbert_index_training",
+                    index_name="colbert_training",
+                    device=cfg.retrieval.get('device', 'cuda'),
+                    max_query_length=cfg.retrieval.get('colbert_query_maxlen', 60),
+                    max_doc_length=cfg.retrieval.get('colbert_doc_maxlen', 120),
+                )
+                logger.info(f"  ✓ Training ColBERT index built")
+            
             # Save training index metadata
             training_metadata = {
                 "total_documents": len(training_documents),
                 "total_nodes": len(training_nodes),
                 "chunking_strategy": "none (1 question = 1 node)",
+                "use_colbert": use_training_colbert,
                 "source_files": {
                     "mcq": cfg.vector_store.training_mcq_path,
                     "saq": cfg.vector_store.training_saq_path,
@@ -877,12 +853,9 @@ def build_atlas(cfg) -> Tuple[VectorStoreIndex, MultiRetrieverOrchestrator]:
     logger.info(f"Sections Extracted: {extraction_report.get('sections_extracted', 'N/A')}")
     logger.info(f"Total Chunks: {len(nodes)}")
     
-    # Only log retriever info if orchestrator was built
-    if orchestrator is not None:
-        logger.info(f"Retrievers: ColBERT={use_colbert}, Dense={use_dense}, Sparse={use_sparse}")
-        logger.info(f"Reranker: {use_reranker}")
-    else:
-        logger.info(f"Retrievers: NONE (training-only mode)")
+    if index is not None:
+        use_colbert = cfg.retrieval.get('use_colbert', True)
+        logger.info(f"ColBERT Index: {'BUILT' if use_colbert else 'DISABLED'}")
     
     if use_training_index and training_index:
         logger.info(f"Training Index: ENABLED ({len(training_documents)} docs)")
@@ -890,7 +863,7 @@ def build_atlas(cfg) -> Tuple[VectorStoreIndex, MultiRetrieverOrchestrator]:
         logger.info(f"Training Index: DISABLED")
     logger.info("="*80)
     
-    return index, orchestrator
+    return index
 
 @hydra.main(version_base=None, config_path="../../conf", config_name="config")
 def main(cfg):
@@ -902,25 +875,13 @@ def main(cfg):
     )
     
     # Build atlas
-    index, orchestrator = build_atlas(cfg)
+    index = build_atlas(cfg)
     
-    # Optional: Run test query to validate system
-    if cfg.get('run_test_query', False):
-        logger.info("\n" + "="*80)
-        logger.info("RUNNING TEST QUERY")
-        logger.info("="*80)
-        
-        test_query = "What are traditional Japanese festivals?"
-        logger.info(f"Query: {test_query}")
-        
-        results = orchestrator.retrieve(test_query)
-        
-        logger.info(f"\n✓ Retrieved {len(results)} results")
-        for i, node_with_score in enumerate(results[:3], 1):
-            logger.info(f"\n[Result {i}]")
-            logger.info(f"  Score: {node_with_score.score:.4f}")
-            logger.info(f"  Metadata: {node_with_score.node.metadata}")
-            logger.info(f"  Text: {node_with_score.node.get_content()[:200]}...")
+    logger.info("\n✓ Atlas building complete!")
+    if index:
+        logger.info(f"  Main index: Built successfully")
+    else:
+        logger.info(f"  Main index: None (training-only mode)")
 
 if __name__ == "__main__":
     main()

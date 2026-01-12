@@ -6,7 +6,7 @@ model:
   cache_dir: "/data/horse/ws/s4610340-culture_agent/.cache"
   reranker_name: "BAAI/bge-reranker-v2-m3"  # Upgraded to v2-m3 for better quality
   # Predictor type: "discriminative" (NLL-based) or "generative" (text generation)
-  predictor_type: "discriminative"
+  predictor_type: "generative"
   # Parameters for generative predictor
   max_new_tokens: 10
   temperature: 0.0
@@ -15,7 +15,7 @@ vector_store:
   auto_suggest: false
   cache_dir: ${model.cache_dir}
   embedding_model_name: "BAAI/bge-m3"
-  persist_dir: "/data/horse/ws/s4610340-culture_agent/culture_questions_agent/storage"
+  persist_dir: "storage/main"  # Main vector index
   
   # Data source configuration (NEW)
   use_wikipedia: true  # Set to false to skip Wikipedia loading (e.g., if index already exists)
@@ -30,16 +30,10 @@ vector_store:
   # Country filtering (NEW) - Reduce dataset size
   country_limit: null  # Limit to first N countries (null/commented for all countries)
   country_filter_list:  # 10 diverse, culturally rich countries
-    - "Japan"
-    - "France"
-    - "India"
     - "China"
-    - "Mexico"
     - "Iran"
     - "United Kingdom"
-    - "UK"
     - "United States"
-    - "US"
   topic_templates:
     - "Culture of {}"
     - "Public holidays in {}"
@@ -118,29 +112,32 @@ vector_store:
   # Batch processing (NEW)
   embed_batch_size: 128  # Batch size for embedding calculations (GPU memory dependent)
   
-  # REMOVED: character-based chunking (obsolete)
-  # chunk_size: 512
-  # chunk_overlap: 50
-  
-  # NEW: Semantic chunking configuration
-  chunking_strategy: "multi_granularity"  # Options: "multi_granularity", "reranker_aligned"
-  tokenizer_name: "BAAI/bge-m3"  # Tokenizer for accurate token counting
-  
-  # Multi-granularity settings (when chunking_strategy = "multi_granularity")
-  granularities:
-    - small    # 200-400 tokens: facts, definitions
-    - medium   # 600-900 tokens: explanations
-    #- large    # 1500-3000 tokens: cultural/historical context
-  
-  # Reranker-aligned settings (when chunking_strategy = "reranker_aligned")
-  target_tokens: 900   # Target chunk size for reranker
-  max_tokens: 1200     # Maximum chunk size
+  chunk_size: 256
+  chunk_overlap: 50
+
+  # Note: These settings are removed as they're handled by SentenceSplitter now
+  # - chunking_strategy (removed)
+  # - granularities (removed)
+  # - tokenizer_name (removed)
+  # - target_tokens (removed)
+  # - max_tokens (removed)
   
   # Training data index (NEW)
   use_training_index: true  # Build and include training data index
   training_mcq_path: "data/train_dataset_mcq.csv"
   training_saq_path: "data/train_dataset_saq.csv"
-  training_persist_dir: "/data/horse/ws/s4610340-culture_agent/culture_questions_agent/storage_training"
+  training_persist_dir: "storage/training"  # Training vector index
+  
+  colbert_index_path_main: "storage/colbert_index_main"  # Main ColBERT index (actual path)
+  colbert_index_name_main: "colbert_main"  #
+
+  colbert_index_path_training: "storage/colbert_index_training"  # Training ColBERT index (actual path)
+  colbert_index_name_training: "colbert_training"  #
+
+  qdrant_path: "storage/qdrant"  # Qdrant vector database path
+
+ingestion:
+  skip_wiki: false
 
 retrieval:
   # Device configuration (H100 GPUs available)
@@ -148,37 +145,42 @@ retrieval:
   
   # Training data retrieval (NEW)
   use_training_retrieval: true  # Enable retrieval from training data index during inference
-  training_top_k: 10  # Number of results from training data retrieval
+  training_top_k: 10  # Number of results from training data retrieval (dense)
+  
+  # Training ColBERT retrieval (NEW)
+  use_training_colbert: false  # Enable ColBERT retrieval from training data
+  training_colbert_top_k: 10  # Number of results from training ColBERT retrieval
   
   # Multi-retriever configuration
-  use_colbert: true    # Late-interaction retrieval (PRIMARY)
-  use_dense: false      # Dense retrieval (SECONDARY)
+  use_colbert: false    # Late-interaction retrieval (PRIMARY)
+  use_dense: true      # Dense retrieval (SECONDARY)
   use_sparse: false     # Sparse retrieval (SUPPORTING)
   use_reranker: true   # Cross-encoder reranking (FINAL DECISION)
   use_web: true       # Enable web search for retrieval
   
   # ColBERT settings (late-interaction retrieval)
   colbert_model: "colbert-ir/colbertv2.0"  # ColBERT v2
-  colbert_top_k: 25  # Number of results from ColBERT
+  colbert_top_k: 20  # Number of results from ColBERT
   
   # Dense retrieval settings (BGE-M3)
-  hybrid_dense_top_k: 25  # Number of results from dense retrieval
+  hybrid_dense_top_k: 20  # Number of results from dense retrieval
   
   # Sparse retrieval settings (BM25)
-  hybrid_sparse_top_k: 25  # Number of results from BM25
+  hybrid_sparse_top_k: 20  # Number of results from BM25
   
   # Reranking settings (cross-encoder)
   reranking_groups:
-    - sources: ["colbert", "dense", "sparse"]
-      top_k: 4
-    - sources: ["training"]
-      top_k: 4
+    - sources: ["wikipedia", "web"]
+      top_k: 6
+    - sources: ["training_data"]
+      top_k: 2
   
   # Legacy settings (for backward compatibility with existing code)
   # Query generation
   num_queries: 3  # Number of search queries to generate from question
   use_direct_question: false  # Use question directly for search instead of generating queries
-  
+  add_question_to_queries: true  # Append original question to generated queries
+
   # Context usage
   use_question_context: true  # Include question context in NLL prediction
   use_option_context: false    # Include option-specific context in NLL prediction
@@ -189,7 +191,6 @@ retrieval:
   include_title: false  # Include title in search snippets
   ddgs_backend: "yandex,yahoo"  # DDGS search backends to use
 
-  
   include_options_in_query: false  # Include options in search query when using reranker
 
 # Optional: Run test query after building index
@@ -203,13 +204,19 @@ mlflow:
   tracking_uri: "sqlite:///tracking/mlruns.sqlite"
   artifact_location: "tracking/artifacts"
 
+# Task configuration
+task_type: "mcq"  # Task type: "mcq" or "saq"
+
 # Inference/Competition submission paths
 test_mcq_path: "data/test_dataset_mcq.csv"
+test_saq_path: "data/test_dataset_saq.csv"
 submission_output_path: "data/mcq_prediction.tsv"
+saq_submission_output_path: "data/saq_prediction.tsv"
 
 # Inference optimization settings
 inference:
   max_concurrent: 8  # Maximum concurrent predictions (adjust based on GPU memory)
+  num_processes: 2
   # Recommended values:
   # - H100 80GB: 12-16
   # - H100 40GB: 8-12

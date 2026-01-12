@@ -2,7 +2,7 @@ from pathlib import Path
 import json
 import pandas as pd
 
-from culture_questions_agent.structures import MCQQuestionTrain, MCQQuestion, SAQQuestionTrain
+from culture_questions_agent.structures import MCQQuestionTrain, MCQQuestion, SAQQuestionTrain, SAQQuestion
 
 
 def read_mcq_data_train(file_path: Path) -> list[MCQQuestionTrain]:
@@ -37,9 +37,23 @@ def read_saq_data_train(file_path: Path) -> list[SAQQuestionTrain]:
     r = []
     for row in df.itertuples():
         question = row.en_question  # type: ignore
+        saq_id = row.ID  # type: ignore
+        pos_id = row.Index  # type: ignore
         answers = []
-        for annotation in eval(row.annotations):
+        for annotation in eval(row.annotations): # type: ignore
             answers.extend(annotation["en_answers"])
-        r.append(SAQQuestionTrain(question=question, answers=list(set(answers))))
+        r.append(SAQQuestionTrain(saq_id=saq_id, pos_id=pos_id, question=question, answers=list(set(answers)))) # type: ignore
+    return r
+
+
+def read_saq_data_test(file_path: Path) -> list[SAQQuestion]:
+    """Reads the short-answer question dataset (without labels) from a CSV file."""
+    df = pd.read_csv(file_path)
+    r = []
+    for row in df.itertuples():
+        question = row.en_question  # type: ignore
+        saq_id = row.ID  # type: ignore
+        pos_id = row.Index  # type: ignore
+        r.append(SAQQuestion(saq_id=saq_id, pos_id=pos_id, question=question)) # type: ignore
     return r
 
