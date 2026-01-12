@@ -46,7 +46,7 @@ class TrainingDataReader(BasePydanticReader):
                             "question_type": "saq",
                             "country": country,
                             "question": question_en,
-                            "answers": answers_en
+                            "answers": json.dumps(answers_en)
                         }
                     ),
                     Document(
@@ -55,7 +55,7 @@ class TrainingDataReader(BasePydanticReader):
                             "question_type": "saq",
                             "country": country,
                             "question": question_local,
-                            "answers": answers_local
+                            "answers": json.dumps(answers_local)
                         }
                     )
                 ]
@@ -85,7 +85,7 @@ class TrainingDataReader(BasePydanticReader):
                     text=f"The correct answer to '{question}' is: {options[answer_idx]}",
                     metadata={
                         "country": country,
-                        "options": options,
+                        "options": json.dumps(options),
                         "answer": answer_idx,
                         "question_type": "mcq",
                         "question": question
