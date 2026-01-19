@@ -60,7 +60,7 @@ class GenerativePredictor(BasePredictor):
         self.temperature = temperature
 
         # Load Jinja2 prompt template
-        template_dir = Path(__file__).parent.parent.parent / "prompts"
+        template_dir = Path(__file__).parent.parent.parent.parent / "prompts"
         self.jinja_env = Environment(loader=FileSystemLoader(str(template_dir)))
         self.mcq_template = self.jinja_env.get_template("mcq_prompt.jinja")
         self.saq_template = self.jinja_env.get_template("saq_prompt.jinja")
@@ -89,8 +89,7 @@ class GenerativePredictor(BasePredictor):
             outputs = self.model.generate( # type: ignore
                 **inputs,
                 max_new_tokens=self.max_new_tokens,
-                temperature=self.temperature,
-                do_sample=self.temperature > 0,
+                do_sample=False,
                 pad_token_id=self.tokenizer.pad_token_id, # type: ignore
                 eos_token_id=self.tokenizer.eos_token_id, # type: ignore
                 stop_strings=["\nQuestion:"],
@@ -265,7 +264,6 @@ class GenerativePredictor(BasePredictor):
                     outputs = self.model.generate( # type: ignore
                         **inputs,
                         max_new_tokens=10,
-                        temperature=0.0,
                         do_sample=False,
                         pad_token_id=self.tokenizer.pad_token_id, # type: ignore
                         eos_token_id=self.tokenizer.eos_token_id, # type: ignore

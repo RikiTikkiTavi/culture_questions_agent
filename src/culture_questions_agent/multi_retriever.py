@@ -42,6 +42,7 @@ class MultiRetrieverOrchestrator:
     def __init__(
         self,
         retrievers: List[BaseRetriever],
+        names: list[str],
     ):
         """
         Initialize multi-retriever orchestrator.
@@ -54,6 +55,7 @@ class MultiRetrieverOrchestrator:
         logger.info("="*80)
         
         self.retrievers = retrievers
+        self.names = names
         
         logger.info(f"Configured with {len(retrievers)} retrievers:")
         for i, retriever in enumerate(retrievers, 1):
@@ -111,17 +113,14 @@ class MultiRetrieverOrchestrator:
         source_tracking = defaultdict(list)
         
         # Execute all retrievers
-        for i, retriever in enumerate(self.retrievers, 1):
-            retriever_name = retriever.__class__.__name__
-            logger.debug(f"[{i}/{len(self.retrievers)}] {retriever_name}...")
-            
+        for i, retriever in enumerate(self.retrievers):
+            retriever_name = self.names[i]            
             try:
-                
                 # All retrievers implement BaseRetriever.retrieve()
                 results = retriever.retrieve(query)
                 results = self._deduplicate(results)
                 
-                logger.debug(f"  ✓ Retrieved {len(results)} results")
+                logger.info(f"✓ Retrieved {len(results)} results from retriever={retriever_name} for question='{query}'")
                 
                 # Track sources
                 for node_with_score in results:
@@ -132,19 +131,15 @@ class MultiRetrieverOrchestrator:
                 logger.error(f"  ✗ {retriever_name} failed: {e}")
                 continue
         
-        # Log source statistics
-        multi_source_count = sum(1 for sources in source_tracking.values() if len(sources) > 1)
-        logger.debug(f"  Multi-source matches: {multi_source_count}")
-        
         # Deduplicate all results by node_id
-        logger.debug(f"Deduplicating total of {len(all_results)} results...")
         final_results = self._deduplicate(all_results)
+        logger.info(f"Removed {len(all_results) - len(final_results)} duplicate results; {len(final_results)} unique results remain.")
         
         # Attach source metadata
         for node_with_score in final_results:
             node_id = node_with_score.node.node_id
-            sources = source_tracking.get(node_id, [])
-            node_with_score.node.metadata["retrieval_sources"] = sources
+            sources = source_tracking[node_id]
+            node_with_score.node.metadata["source"] = sources
         
         logger.debug("="*60)
         logger.debug(f"✓ Final: {len(final_results)} results")

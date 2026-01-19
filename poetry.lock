@@ -6940,6 +6940,30 @@ requests = ">=2.0.0"
 rsa = ["oauthlib[signedtoken] (>=3.0.0)"]
 
 [[package]]
+name = "rerankers"
+version = "0.10.0"
+description = "A unified API for various document re-ranking models."
+optional = false
+python-versions = ">=3.8"
+groups = ["main"]
+files = [
+    {file = "rerankers-0.10.0-py3-none-any.whl", hash = "sha256:634a6befa130a245ed46022ade217ee482869448f01aae2051ed54d7d5bd2791"},
+    {file = "rerankers-0.10.0.tar.gz", hash = "sha256:b8e8b363abc4e9757151956949c27b197993c0a774437287a932f855afc17a73"},
+]
+
+[package.extras]
+all = ["accelerate (>=0.26.0)", "flash-attn", "flashrank", "litellm", "nmslib-metabrainz ; python_version >= \"3.10\"", "peft (>=0.13.0)", "pillow", "protobuf", "rank-llm ; python_version >= \"3.10\"", "requests", "sentencepiece", "torch", "transformers (>=4.45.0)"]
+api = ["requests"]
+dev = ["ipyprogress", "ipython", "ir_datasets", "isort", "pytest", "ranx", "ruff", "srsly"]
+flashrank = ["flashrank"]
+gpt = ["litellm"]
+llmlayerwise = ["flash-attn", "protobuf", "sentencepiece", "torch", "transformers (>=4.45.0)"]
+monovlm = ["accelerate (>=0.26.0)", "flash-attn", "peft (>=0.13.0)", "pillow", "protobuf", "sentencepiece", "torch", "transformers (>=4.45.0)"]
+pylate = ["pylate"]
+rankllm = ["nmslib-metabrainz ; python_version >= \"3.10\"", "rank-llm ; python_version >= \"3.10\""]
+transformers = ["protobuf", "sentencepiece", "torch", "transformers (>=4.45.0)"]
+
+[[package]]
 name = "rich"
 version = "14.2.0"
 description = "Render rich text, tables, progress bars, syntax highlighting, markdown and more to the terminal"
@@ -9150,4 +9174,4 @@ testing = ["coverage[toml]", "zope.event", "zope.testing"]
 [metadata]
 lock-version = "2.1"
 python-versions = ">=3.11,<3.14"
-content-hash = "320b13c98f3829872cbd84ad481aa60ecc55a0aae17f7feda20caf99f5bb7f80"
+content-hash = "496d3201912c643a2e96816eeb416c763832505bf4a09ae2e136a77972cc6eb1"

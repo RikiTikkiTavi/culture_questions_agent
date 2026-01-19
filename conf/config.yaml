@@ -157,36 +157,18 @@ retrieval:
   # Device configuration (H100 GPUs available)
   device: "cuda"
   
-  # Training data retrieval (NEW)
-  use_training_retrieval: true  # Enable retrieval from training data index during inference
-  training_top_k: 10  # Number of results from training data retrieval (dense)
-  
-  # Training ColBERT retrieval (NEW)
-  use_training_colbert: false  # Enable ColBERT retrieval from training data
-  training_colbert_top_k: 10  # Number of results from training ColBERT retrieval
-  
   # Multi-retriever configuration
-  use_colbert: false    # Late-interaction retrieval (PRIMARY)
-  use_dense: true      # Dense retrieval (SECONDARY)
-  use_sparse: false     # Sparse retrieval (SUPPORTING)
-  use_reranker: true   # Cross-encoder reranking (FINAL DECISION)
-  use_web: true       # Enable web search for retrieval
+  use_colbert: true    # Late-interaction retrieval (PRIMARY)
+  use_reranker: true   # Cross-encoder reranking
   
-  # ColBERT settings (late-interaction retrieval)
-  colbert_model: "colbert-ir/colbertv2.0"  # ColBERT v2
-  colbert_top_k: 20  # Number of results from ColBERT
-  
-  # Dense retrieval settings (BGE-M3)
-  hybrid_dense_top_k: 20  # Number of results from dense retrieval
-  
-  # Sparse retrieval settings (BM25)
-  hybrid_sparse_top_k: 20  # Number of results from BM25
-  
+  use_wiki_retrieval: true  # Enable Wikipedia retrieval
+  use_train_data_retrieval: true  # Enable training data retrieval
+  use_web_retrieval: true
   # Reranking settings (cross-encoder)
   reranking_groups:
-    - sources: ["wikipedia", "web"]
+    - sources: ["wiki", "web"]
       top_k: 6
-    - sources: ["training_data"]
+    - sources: ["train_data"]
       top_k: 2
   
   # Legacy settings (for backward compatibility with existing code)
