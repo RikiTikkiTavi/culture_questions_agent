@@ -1,8 +1,3 @@
-"""Multi-retriever orchestration for SOTA cultural QA retrieval.
-
-Orchestrates ColBERT (late-interaction), dense (BGE-M3), and sparse (BM25)
-retrievers with fusion and cross-encoder reranking for maximum answer quality.
-"""
 import json
 import logging
 import mlflow
@@ -10,15 +5,8 @@ from pathlib import Path
 from typing import List, Optional, Dict, Any
 from collections import defaultdict
 
-from llama_index.core import VectorStoreIndex, StorageContext, load_index_from_storage
 from llama_index.core.schema import NodeWithScore, BaseNode
 from llama_index.core.retrievers import VectorIndexRetriever, BaseRetriever
-from llama_index.core import QueryBundle
-from llama_index.retrievers.bm25 import BM25Retriever
-from llama_index.core.postprocessor import SentenceTransformerRerank
-
-from culture_questions_agent.colbert_retriever import ColBERTRetriever
-from culture_questions_agent.search_tools import SearchEngine
 
 from mlflow.entities import Document
 

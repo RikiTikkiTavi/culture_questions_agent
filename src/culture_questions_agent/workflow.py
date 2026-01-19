@@ -14,7 +14,7 @@ from llama_index.core.workflow import (
     Workflow,
     step,
 )
-from llama_index.core import VectorStoreIndex, StorageContext, load_index_from_storage, Settings
+from llama_index.core import VectorStoreIndex
 from llama_index.embeddings.huggingface import HuggingFaceEmbedding
 from llama_index.postprocessor.flag_embedding_reranker import FlagEmbeddingReranker
 from llama_index.core.schema import TextNode, NodeWithScore
@@ -24,7 +24,6 @@ from culture_questions_agent.query_generator import QueryGenerator
 from culture_questions_agent.search_tools import SearchEngine
 from culture_questions_agent.predictor.generative_predictor import GenerativePredictor
 from culture_questions_agent.multi_retriever import MultiRetrieverOrchestrator
-from culture_questions_agent.colbert_retriever import ColBERTRetriever
 from llama_index.vector_stores.lancedb import LanceDBVectorStore
 from lancedb.rerankers import ColbertReranker
 
