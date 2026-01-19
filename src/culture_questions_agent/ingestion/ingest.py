@@ -3,14 +3,12 @@ from llama_index.core.ingestion import IngestionPipeline
 from llama_index.core.node_parser import SentenceSplitter
 from llama_index.core.readers.base import ReaderConfig
 
-from culture_questions_agent.ingestion.web import obtain_web_docs
 from culture_questions_agent.ingestion.wikipedia import WikipediaTopicReader
 from culture_questions_agent.ingestion.wikivoyage import WikivoyageReader
 from culture_questions_agent.ingestion.questions import TrainingDataReader
 from llama_index.embeddings.huggingface import HuggingFaceEmbedding
-
-import qdrant_client
 from llama_index.vector_stores.lancedb import LanceDBVectorStore
+from llama_index.core.storage.docstore import SimpleDocumentStore
 
 import hydra
 
@@ -18,6 +16,7 @@ logger = logging.getLogger(__name__)
 
 @hydra.main(version_base=None, config_path="../../../conf", config_name="config")
 def main(cfg):
+    logger.info("Starting ingestion pipeline...")
 
     sentence_splitter = SentenceSplitter(
         chunk_size=cfg.vector_store.get("chunk_size", 512),
@@ -37,7 +36,9 @@ def main(cfg):
         topics = cfg.vector_store.get("topic_templates", [])
         additional_pages = cfg.vector_store.get("additional_wikipedia_pages", [])
 
+        wiki_doc_store = SimpleDocumentStore()
         wiki_store = LanceDBVectorStore(uri=cfg.vector_store.get("lancedb_path", "storage/lancedb"), table_name="wiki_like")
+
 
         wiki_reader_cfg = ReaderConfig(
             reader=WikipediaTopicReader(auto_suggest=cfg.vector_store.auto_suggest),
@@ -58,7 +59,6 @@ def main(cfg):
             },
         )
 
-
         pipeline_wikipedia = IngestionPipeline(
             readers=[
                 wiki_reader_cfg,
@@ -66,43 +66,49 @@ def main(cfg):
             ],
             transformations=[sentence_splitter, embedding_transform],
             vector_store=wiki_store,
+            docstore=wiki_doc_store,
         )
         logger.info("Starting Wikipedia and Wikivoyage ingestion...")
         pipeline_wikipedia.run(show_progress=True)
 
-
     # Training data ingestion
-    questions_like_store = LanceDBVectorStore(uri=cfg.vector_store.get("lancedb_path", "storage/lancedb"), table_name="question_like")
+    if not cfg.ingestion.get("skip_training_data", False):
+        questions_like_store = LanceDBVectorStore(uri=cfg.vector_store.get("lancedb_path", "storage/lancedb"), table_name="question_like")
 
-    pipeline_training_data = IngestionPipeline(
-        readers=[
-            ReaderConfig(
-                reader=TrainingDataReader(),
-                reader_kwargs={
-                    "saq_path": cfg.vector_store.get(
-                        "training_saq_path", "data/saq_training_data.tsv"
-                    ),
-                    "mcq_path": cfg.vector_store.get(
-                        "training_mcq_path", "data/mcq_training_data.tsv"
-                    ),
-                },
-            )
-        ],
-        transformations=[embedding_transform],
-        vector_store=questions_like_store,
-    )
-    logger.info("Starting training data ingestion...")
-    pipeline_training_data.run(show_progress=True)
+        pipeline_training_data = IngestionPipeline(
+            readers=[
+                ReaderConfig(
+                    reader=TrainingDataReader(),
+                    reader_kwargs={
+                        "saq_path": cfg.vector_store.get(
+                            "training_saq_path", "data/saq_training_data.tsv"
+                        ),
+                        "mcq_path": cfg.vector_store.get(
+                            "training_mcq_path", "data/mcq_training_data.tsv"
+                        ),
+                    },
+                )
+            ],
+            transformations=[embedding_transform],
+            vector_store=questions_like_store,
+            docstore=SimpleDocumentStore(),
+        )
+        logger.info("Starting training data ingestion...")
+        pipeline_training_data.run(show_progress=True)
 
     # Web ingestion
-    web_like_store = LanceDBVectorStore(uri=cfg.vector_store.get("lancedb_path", "storage/lancedb"), table_name="web_like")
-    pipeline_web = IngestionPipeline(
-        documents=obtain_web_docs(cfg),
-        transformations=[sentence_splitter, embedding_transform],
-        vector_store=web_like_store,
-    )
-    logger.info("Starting web ingestion...")
-    pipeline_web.run(show_progress=True)
+    if not cfg.ingestion.get("skip_web", False):
+        web_like_store = LanceDBVectorStore(uri=cfg.vector_store.get("lancedb_path", "storage/lancedb"), table_name="web_like")
+        web_reader = hydra.utils.instantiate(cfg.ingestion.web_reader)
+        docs = web_reader.lazy_load_data()
+        pipeline_web = IngestionPipeline(
+            documents=docs,
+            transformations=[sentence_splitter, embedding_transform],
+            vector_store=web_like_store,
+            docstore=SimpleDocumentStore(),
+        )
+        logger.info("Starting web ingestion...")
+        pipeline_web.run(show_progress=True, num_workers=6)
 
 
 if __name__ == "__main__":

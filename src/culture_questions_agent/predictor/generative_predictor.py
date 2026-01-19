@@ -10,7 +10,7 @@ from jinja2 import Environment, FileSystemLoader
 from pathlib import Path
 from transformers import AutoModelForCausalLM, AutoTokenizer, StopStringCriteria, AutoModel
 
-from culture_questions_agent.base_predictor import BasePredictor
+from culture_questions_agent.predictor.base import BasePredictor
 
 logger = logging.getLogger(__name__)
 
@@ -82,7 +82,6 @@ class GenerativePredictor(BasePredictor):
             prompt,
             return_tensors="pt",
             truncation=True,
-            max_length=16384
         ).to(self.model.device) # type: ignore
         
         # Generate
@@ -105,6 +104,22 @@ class GenerativePredictor(BasePredictor):
 
         return generated_text.strip()
     
+    def get_option_token_ids(self, letter) -> list[int]:
+        variants = [
+            letter,          # "A"
+            f" {letter}",    # " A"
+            f"\n{letter}",   # "\nA"
+        ]
+
+        token_ids = []
+        for v in variants:
+            ids = self.tokenizer.encode(v, add_special_tokens=False)
+            assert len(ids) == 1, f"Option is not a single token: {v}"
+            token_ids.append(ids[0])
+
+        assert len(token_ids) > 0, "No token IDs found for option"
+        return token_ids
+
     def predict_best_option(
         self,
         question: str,
@@ -160,7 +175,6 @@ class GenerativePredictor(BasePredictor):
                 )
                 gen_span.set_inputs({"prompt": prompt})
                 
-                # Generate answer
                 # Tokenize
                 inputs = self.tokenizer(
                     prompt,
@@ -169,17 +183,30 @@ class GenerativePredictor(BasePredictor):
                     max_length=16384
                 ).to(self.model.device) # type: ignore
                 
-                # Generate
+                # Forward pass
                 with torch.no_grad():
-                    # Peak into logits, find "A", "B", "C, "D" tokens, select highest
-                    logits = self.model(**inputs).logits # type: ignore
-                    option_tokens = {opt: self.tokenizer.encode(opt, add_special_tokens=False)[0] for opt in options.keys()} # type: ignore
-                    last_token_logits = logits[0, -1]
-                    best_option = max(option_tokens.keys(), key=lambda opt: last_token_logits[option_tokens[opt]].item())
+                    outputs = self.model(**inputs)
+                    logits = outputs.logits  # [1, seq_len, vocab]
 
-                    gen_span.set_outputs({"generated_text": best_option})
+                # Get next-token logits
+                next_token_logits = logits[0, -1]
 
-            span.set_outputs({"predicted_option": best_option})
+                # Force leading-space options (LLaMA-3 correct)
+                option_scores = {}
+                for opt_key in options.keys():
+                    token_ids = self.get_option_token_ids(opt_key)
+                    option_scores[opt_key] = torch.logsumexp(
+                        torch.tensor([next_token_logits[i] for i in token_ids]),
+                        dim=0
+                    ).item()
+
+                # Pick highest logit
+                best_option = max(
+                    option_scores.keys(),
+                    key=lambda opt: option_scores[opt]
+                )
+
+                span.set_outputs({"predicted_option": best_option})
             
             logger.info(f"✓ Selected option {best_option}")
         

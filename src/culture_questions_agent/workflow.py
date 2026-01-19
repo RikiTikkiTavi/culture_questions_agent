@@ -21,9 +21,11 @@ from llama_index.core.schema import TextNode, NodeWithScore
 from culture_questions_agent.structures import MCQQuestion, SAQQuestion
 from culture_questions_agent.query_generator import QueryGenerator
 from culture_questions_agent.search_tools import SearchEngine
-from culture_questions_agent.predictor_factory import PredictorFactory
+from culture_questions_agent.predictor.generative_predictor import GenerativePredictor
 from culture_questions_agent.multi_retriever import MultiRetrieverOrchestrator
 from culture_questions_agent.colbert_retriever import ColBERTRetriever
+from llama_index.vector_stores.lancedb import LanceDBVectorStore
+from lancedb.rerankers import ColbertReranker
 
 from mlflow.entities import Document
 
@@ -110,13 +112,12 @@ class CulturalQAWorkflow(Workflow):
         logger.info(
             f"[1/5] Initializing {predictor_type.capitalize()} Predictor: {cfg.model.llm_name}"
         )
-        self.predictor = PredictorFactory.create_predictor(
-            predictor_type=predictor_type,
+        self.predictor = GenerativePredictor(
             model_name=cfg.model.llm_name,
             cache_dir=cfg.model.cache_dir,
             device="auto",
             max_new_tokens=cfg.model.get("max_new_tokens", 10),
-            temperature=cfg.model.get("temperature", 0.1),
+            temperature=cfg.model.get("temperature", 0.0),
         )
 
         # [2] Initialize Query Generator (reuses the same model/tokenizer for discriminative)
@@ -141,8 +142,24 @@ class CulturalQAWorkflow(Workflow):
         self.use_web = cfg.retrieval.get("use_web", False)
 
         if use_retrieval:
-            logger.info(f"[4/5] Initializing SOTA Multi-Retriever")
-            
+            logger.info(f"[4/5] Initializing Multi-Retriever")
+            wiki_store = LanceDBVectorStore(uri=cfg.vector_store.get("lancedb_path", "storage/lancedb"), table_name="wiki_like")
+            if cfg.retrieval.get("use_colbert", True):
+                reranker = ColbertReranker()
+                wiki_store._add_reranker(reranker)
+            wiki_index = VectorStoreIndex.from_vector_store(
+                vector_store=wiki_store,
+                embed_model=HuggingFaceEmbedding(
+                    model_name=cfg.vector_store.embedding_model_name,
+                    cache_folder=cfg.model.cache_dir,
+                ),
+            )
+            wiki_retriever = wiki_index.as_retriever(
+                similarity_top_k=cfg.retrieval.get("wiki_top_k", 10),
+                vector_store_query_mode="hybrid",
+                alpha=0.5
+            )
+
             # Load main index
             logger.info(f"  Loading vector index from {cfg.vector_store.persist_dir}...")
             embed_model = HuggingFaceEmbedding(
@@ -155,7 +172,7 @@ class CulturalQAWorkflow(Workflow):
             index = load_index_from_storage(storage_context)
             nodes = list(index.docstore.docs.values())
             logger.info(f"  ✓ Loaded {len(nodes)} nodes")
-            
+
             # Build list of retrievers based on config
             retrievers = []
             retriever_names = []

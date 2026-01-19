@@ -2,7 +2,7 @@ defaults:
   - _self_  
 
 model:
-  llm_name: "meta-llama/Llama-3.1-8B"
+  llm_name: "meta-llama/Meta-Llama-3-8B"
   cache_dir: "/data/horse/ws/s4610340-culture_agent/.cache"
   reranker_name: "BAAI/bge-reranker-v2-m3"  # Upgraded to v2-m3 for better quality
   # Predictor type: "discriminative" (NLL-based) or "generative" (text generation)
@@ -34,6 +34,8 @@ vector_store:
     - "Iran"
     - "United Kingdom"
     - "United States"
+    - "US"
+    - "UK"
   topic_templates:
     - "Culture of {}"
     - "Public holidays in {}"
@@ -138,6 +140,18 @@ vector_store:
 
 ingestion:
   skip_wiki: false
+  skip_web: false
+  skip_training_data: false
+  web_reader:
+    _target_: culture_questions_agent.ingestion.web.WebSearchReader
+    llm_name: ${model.llm_name}
+    cache_dir: ${model.cache_dir}
+    saq_path: "data/train_dataset_saq.csv"
+    mcq_path: "data/train_dataset_mcq.csv"
+    ddgs_backend: "yandex"
+    max_results_per_query: 3
+    max_workers: 10
+    limit_questions_type: "mcq"
 
 retrieval:
   # Device configuration (H100 GPUs available)
@@ -189,7 +203,7 @@ retrieval:
   max_search_chars: 5000  # Maximum characters to keep from search results
   max_web_search_results: 10
   include_title: false  # Include title in search snippets
-  ddgs_backend: "yandex,yahoo"  # DDGS search backends to use
+  ddgs_backend: "yandex,yahoo,wikipedia,grokipedia"  # DDGS search backends to use
 
   include_options_in_query: false  # Include options in search query when using reranker
 

@@ -1,0 +1,26 @@
+{% if context_parts -%}
+Context:
+{% for part in context_parts %}
+{{ part }}
+{% endfor %}
+
+---
+
+{% endif -%}
+Give the correct answer based only on the context and the cultural norms implied by the question.
+
+Rules:
+
+- Output only the answer
+- Output format must be exactly as follows: "answer"
+- Answer must be concise
+- Answer must not contain any special characters other than quotation marks
+
+Question: What is the capital of France?
+Answer: "Paris"
+
+Question: What is the traditional dress of Japan called?
+Answer: "Kimono"
+
+Question: {{ question }}
+Answer:
