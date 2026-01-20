@@ -145,7 +145,7 @@ class CulturalQAWorkflow(Workflow):
             wiki_retriever = wiki_index.as_retriever(
                 similarity_top_k=cfg.retrieval.get("wiki_top_k", 10),
                 vector_store_query_mode="hybrid",
-                alpha=0.5
+                alpha=0.25
             )
             retrievers.append(wiki_retriever)
             retriever_names.append("wiki")
@@ -164,7 +164,7 @@ class CulturalQAWorkflow(Workflow):
                 ),
             )
             q_retriever = q_index.as_retriever(
-                similarity_top_k=cfg.retrieval.get("train_data_top_k", 4),
+                similarity_top_k=10,
             )
             retrievers.append(q_retriever)
             retriever_names.append("train_data")
@@ -359,11 +359,11 @@ class CulturalQAWorkflow(Workflow):
                             for doc in group_docs
                         ]
                         # Rerank all nodes and slice to top_k (thread-safe - no state mutation)
-                        reranked_nodes = await asyncio.to_thread(self.reranker.postprocess_nodes, nodes, query_str=ev.question)
+                        reranked_nodes = await self.reranker.apostprocess_nodes(nodes, query_str=ev.question)
                         
                         # Extract documents and scores
-                        selected_docs = [node.node.get_content() for node in reranked_nodes]
-                        scores = [node.score for node in reranked_nodes]
+                        selected_docs = [node.node.get_content() for node in reranked_nodes[:top_k]]
+                        scores = [node.score for node in reranked_nodes[:top_k]]
                         logger.info(
                             f"  ✓ Selected top {len(selected_docs)} snippets after reranking for group"
                         )

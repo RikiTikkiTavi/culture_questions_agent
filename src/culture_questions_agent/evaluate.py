@@ -26,6 +26,7 @@ def build_mcq_predict_fn(wf: CulturalQAWorkflow):
             msq_id="",
             question=question,
             options=options,
+            country=""
         )
         return await wf.run(question=mcq_question)
             
@@ -34,7 +35,7 @@ def build_mcq_predict_fn(wf: CulturalQAWorkflow):
 def build_saq_predict_fn(wf: CulturalQAWorkflow):
     async def predict_fn(question: str) -> str:
         """Predict function for SAQ evaluation."""
-        saq_question = SAQQuestion(question=question, saq_id="", pos_id=0)
+        saq_question = SAQQuestion(question=question, saq_id="", pos_id=0, country="")
         return await wf.run(question=saq_question)
             
     return predict_fn

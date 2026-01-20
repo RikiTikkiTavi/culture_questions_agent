@@ -15,9 +15,17 @@ def read_mcq_data_train(file_path: Path) -> list[MCQQuestionTrain]:
         countries = json.loads(row.choice_countries)  # type: ignore
         answer = row.answer_idx
         msq_id = row.MCQID  # type: ignore
-        r.append(MCQQuestionTrain(msq_id=msq_id, question=question, options=options, countries=countries, answer=answer)) # type: ignore
+        country = extract_country_from_row(row)
+        r.append(MCQQuestionTrain(msq_id=msq_id, question=question, options=options, country=country, answer=answer)) # type: ignore
     return r
 
+def extract_country_from_row(row) -> str:
+    country = row.country
+    if country == "US":
+        country = "United States"
+    elif country == "UK":
+        country = "United Kingdom"
+    return country
 
 def read_mcq_data_test(file_path: Path) -> list[MCQQuestion]:
     """Reads the multiple-choice question dataset (without labels) from a CSV file."""
@@ -25,9 +33,10 @@ def read_mcq_data_test(file_path: Path) -> list[MCQQuestion]:
     r = []
     for row in df.itertuples():
         question = row.prompt.split("?")[0] + "?"  # type: ignore
+        country = extract_country_from_row(row)
         options = json.loads(row.choices)  # type: ignore
         msq_id = row.MCQID  # type: ignore
-        r.append(MCQQuestion(msq_id=msq_id, question=question, options=options))
+        r.append(MCQQuestion(msq_id=msq_id, question=question, options=options, country=country)) # type: ignore
     return r
 
 
@@ -39,10 +48,11 @@ def read_saq_data_train(file_path: Path) -> list[SAQQuestionTrain]:
         question = row.en_question  # type: ignore
         saq_id = row.ID  # type: ignore
         pos_id = row.Index  # type: ignore
+        country = extract_country_from_row(row)
         answers = []
         for annotation in eval(row.annotations): # type: ignore
             answers.extend(annotation["en_answers"])
-        r.append(SAQQuestionTrain(saq_id=saq_id, pos_id=pos_id, question=question, answers=list(set(answers)))) # type: ignore
+        r.append(SAQQuestionTrain(saq_id=saq_id, pos_id=pos_id, question=question, answers=list(set(answers)), country=country)) # type: ignore
     return r
 
 
@@ -54,6 +64,7 @@ def read_saq_data_test(file_path: Path) -> list[SAQQuestion]:
         question = row.en_question  # type: ignore
         saq_id = row.ID  # type: ignore
         pos_id = row.Index  # type: ignore
-        r.append(SAQQuestion(saq_id=saq_id, pos_id=pos_id, question=question)) # type: ignore
+        country = extract_country_from_row(row)
+        r.append(SAQQuestion(saq_id=saq_id, pos_id=pos_id, question=question, country=country)) # type: ignore
     return r
 

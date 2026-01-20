@@ -166,10 +166,10 @@ retrieval:
   use_web_retrieval: true
   # Reranking settings (cross-encoder)
   reranking_groups:
+    - sources: ["train_data"]
+      top_k: 4
     - sources: ["wiki", "web"]
       top_k: 6
-    - sources: ["train_data"]
-      top_k: 2
   
   # Legacy settings (for backward compatibility with existing code)
   # Query generation

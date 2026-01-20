@@ -263,7 +263,7 @@ class GenerativePredictor(BasePredictor):
                 with torch.no_grad():
                     outputs = self.model.generate( # type: ignore
                         **inputs,
-                        max_new_tokens=10,
+                        max_new_tokens=20,
                         do_sample=False,
                         pad_token_id=self.tokenizer.pad_token_id, # type: ignore
                         eos_token_id=self.tokenizer.eos_token_id, # type: ignore
