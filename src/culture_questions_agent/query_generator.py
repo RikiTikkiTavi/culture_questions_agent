@@ -5,13 +5,16 @@ import torch
 from pathlib import Path
 from jinja2 import Environment, FileSystemLoader
 
+from transformers import AutoModelForCausalLM, AutoTokenizer, StopStringCriteria, AutoModel
+
+
 logger = logging.getLogger(__name__)
 
 
 class QueryGenerator:
     """Generate search queries from questions using LLM."""
     
-    def __init__(self, model, tokenizer):
+    def __init__(self, model):
         """
         Initialize query generator with pre-loaded model.
         
@@ -20,9 +23,14 @@ class QueryGenerator:
             tokenizer: HuggingFace tokenizer
         """
         logger.info("Initializing LLM-based Query Generator")
-        self.model = model
-        self.tokenizer = tokenizer
-        
+
+        self.model = AutoModelForCausalLM.from_pretrained(model) # type: ignore
+        self.tokenizer = AutoTokenizer.from_pretrained(model)
+
+        # Set pad token if not set
+        if self.tokenizer.pad_token is None:
+            self.tokenizer.pad_token = self.tokenizer.eos_token
+                
         # Load Jinja2 templates
         template_dir = Path(__file__).parent.parent.parent / "prompts"
         self.jinja_env = Environment(loader=FileSystemLoader(str(template_dir)))

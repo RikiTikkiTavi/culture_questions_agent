@@ -9,7 +9,7 @@ model:
   # Predictor type: "discriminative" (NLL-based) or "generative" (text generation)
   predictor_type: "generative"
   # Parameters for generative predictor
-  max_new_tokens: 10
+  max_new_tokens: 15
   temperature: 0.0
 
 ingestion:

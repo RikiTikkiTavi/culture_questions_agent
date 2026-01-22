@@ -125,7 +125,7 @@ class CulturalQAWorkflow(Workflow):
         # [2] Initialize Query Generator (reuses the same model/tokenizer for discriminative)
         logger.info(f"[2/5] Initializing Query Generator")
         self.query_generator = QueryGenerator(
-            model=self.predictor.model, tokenizer=self.predictor.tokenizer
+            model=cfg.model.llm_name, 
         )
 
         retrievers = []
