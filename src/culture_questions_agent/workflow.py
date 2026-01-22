@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 from typing import Dict, Optional, Union
 
+import hydra
 import mlflow
 from llama_index.core.workflow import (
     Event,
@@ -134,9 +135,9 @@ class CulturalQAWorkflow(Workflow):
         if cfg.retrieval.get("use_wiki_retrieval", True):
             logger.info(f"Initializing Wiki-Retriever")
             wiki_store = LanceDBVectorStore(uri=cfg.ingestion.get("lancedb_path", "storage/lancedb"), table_name="wiki_like")
-            if cfg.retrieval.get("use_colbert", True):
-                reranker = ColbertReranker()
-                wiki_store._add_reranker(reranker)
+            #if cfg.retrieval.get("use_colbert", True):
+            #    reranker = ColbertReranker()
+            #    wiki_store._add_reranker(reranker)
             wiki_index = VectorStoreIndex.from_vector_store(
                 vector_store=wiki_store,
                 embed_model=HuggingFaceEmbedding(
@@ -156,9 +157,9 @@ class CulturalQAWorkflow(Workflow):
         if cfg.retrieval.get("use_train_data_retrieval", True):
             logger.info(f"Initializing train-data retriever")
             q_store = LanceDBVectorStore(uri=cfg.ingestion.get("lancedb_path", "storage/lancedb"), table_name="question_like")
-            if cfg.retrieval.get("use_colbert", True):
-                reranker = ColbertReranker()
-                q_store._add_reranker(reranker)
+            # if cfg.retrieval.get("use_colbert", True):
+            #     reranker = ColbertReranker()
+            #     q_store._add_reranker(reranker)
             q_index = VectorStoreIndex.from_vector_store(
                 vector_store=q_store,
                 embed_model=HuggingFaceEmbedding(
@@ -167,7 +168,7 @@ class CulturalQAWorkflow(Workflow):
                 ),
             )
             q_retriever = q_index.as_retriever(
-                similarity_top_k=10,
+                similarity_top_k=cfg.retrieval.get("train_data_top_k", 10),
             )
             retrievers.append(q_retriever)
             retriever_names.append("train_data")
@@ -191,17 +192,18 @@ class CulturalQAWorkflow(Workflow):
         
         self.use_reranker = cfg.retrieval.get("use_reranker", True)
 
+        self.group_rerankers = []
         # Initialize reranker
         # Web+Wiki and training data will be reranked separately
         if self.use_reranker:
             logger.info(
-                f"[5/5] Initializing BGE Reranker: {cfg.model.get('reranker_name', 'BAAI/bge-reranker-v2-m3')}"
+                f"[5/5] Initializing rerankers"
             )
-            # Note: cache_dir is set globally via HF_HOME environment variable above
-            self.reranker = FlagEmbeddingReranker(
-                model=cfg.model.get("reranker_name", "BAAI/bge-reranker-v2-m3"),
-                top_n=10,  # Default, will be overridden per rerank call
-            )
+            for group in cfg.retrieval.get("reranking_groups", []):
+                logger.info(f"  Reranking group for sources: {group.get('sources', [])}, reranker: {group.get('reranker')}")
+                sources  = group.get("sources", [])
+                reranker = hydra.utils.instantiate(group.reranker)       
+                self.group_rerankers.append((sources, reranker))
         
         logger.info("=" * 80)
         logger.info("✓ Workflow initialized successfully!")
@@ -323,58 +325,46 @@ class CulturalQAWorkflow(Workflow):
         all_docs = ev.raw_documents
         context_snippets = []
 
-        if self.use_reranker and all_docs and self.reranker:
+        if self.use_reranker and all_docs and self.group_rerankers:
+           
             # Rerank in groups based on config
-            for group_cfg in self.cfg.retrieval.get("reranking_groups", []):
-                sources = group_cfg.get("sources", [])
-                top_k = group_cfg.get("top_k", 5)
-
+            for sources, reranker in self.group_rerankers:
+                
+                # select docs for this group
                 group_docs = []
                 for node_with_score in all_docs:
                     if set(sources).intersection(node_with_score.node.metadata["source"]):
-                        group_docs.append(node_with_score.node.get_content())
+                        group_docs.append(node_with_score)
 
-                if group_docs:
-                    logger.info(
-                        f"  Reranking group for sources {sources} with {len(group_docs)} docs..."
-                    )
-                    with mlflow.start_span(
-                        name="reranking_group_" + "_".join(sources),
-                        span_type="RERANKER",
-                    ) as span:
-                        span.set_inputs(
-                            [
-                                Document(group_docs[i], metadata={"source": sources})
-                                for i in range(len(group_docs))
-                            ]
-                        )
-                        # Convert documents to nodes for reranking
-                        nodes = [
-                            NodeWithScore(node=TextNode(text=doc), score=0.0)
-                            for doc in group_docs
-                        ]
-                        # Rerank all nodes and slice to top_k (thread-safe - no state mutation)
-                        reranked_nodes = await self.reranker.apostprocess_nodes(nodes, query_str=ev.question)
-                        
-                        # Extract documents and scores
-                        selected_docs = [node.node.get_content() for node in reranked_nodes[:top_k]]
-                        scores = [node.score for node in reranked_nodes[:top_k]]
-                        logger.info(
-                            f"  ✓ Selected top {len(selected_docs)} snippets after reranking for group"
-                        )
-                        context_snippets.extend(selected_docs)
-                        span.set_outputs(
-                            [
-                                Document(
-                                    selected_docs[i], metadata={"score": scores[i]}
-                                )
-                                for i in range(len(selected_docs))
-                            ]
-                        )
-                else:
+                if not group_docs:
                     logger.info(
                         f"  No documents found for sources {sources}, skipping reranking for this group"
                     )
+                    continue
+
+                logger.info(
+                    f"  Reranking group for sources {sources} with {len(group_docs)} docs..."
+                )
+                with mlflow.start_span(
+                    name="reranking_group_" + "_".join(sources),
+                    span_type="RERANKER",
+                ) as span:
+                    span.set_inputs(
+                        [
+                            Document(group_docs[i], metadata={"source": sources})
+                            for i in range(len(group_docs))
+                        ]
+                    )
+                    # Rerank all nodes and slice to top_k (thread-safe - no state mutation)
+                    reranked_nodes = await reranker.apostprocess_nodes(group_docs, query_str=ev.question)
+                    
+                    # Extract documents and scores
+                    selected_docs = [node.node.get_content() for node in reranked_nodes]
+                    logger.info(
+                        f"  ✓ Selected top {len(selected_docs)} snippets after reranking for group"
+                    )
+                    context_snippets.extend(selected_docs)
+                    span.set_outputs(reranked_nodes)
 
         else:
             # Even without reranking, limit to top_k to avoid context overflow

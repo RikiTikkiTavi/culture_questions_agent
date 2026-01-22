@@ -124,19 +124,32 @@ ingestion:
 
 retrieval:
   # Multi-retriever configuration
-  use_colbert: true    # Late-interaction retrieval (PRIMARY)
+  # use_colbert: true    # Late-interaction retrieval (PRIMARY)
   use_reranker: true   # Cross-encoder reranking
   
   use_wiki_retrieval: true  # Enable Wikipedia retrieval
   use_train_data_retrieval: true  # Enable training data retrieval
   use_web_retrieval: true
+  
   # Reranking settings (cross-encoder)
   reranking_groups:
     - sources: ["train_data"]
-      top_k: 4
+      reranker:
+        _target_: llama_index.postprocessor.flag_embedding_reranker.FlagEmbeddingReranker
+        model: "BAAI/bge-reranker-v2-m3"
+        top_n: 4
     - sources: ["wiki", "web"]
-      top_k: 6
+      reranker:
+        _target_: llama_index.postprocessor.colbert_rerank.ColbertRerank
+        top_n: 6
+        model: "colbert-ir/colbertv2.0"
+        tokenizer: "colbert-ir/colbertv2.0"
+        keep_retrieval_score: true
   
+  wiki_top_k: 25
+  web_top_k: 10
+  train_data_top_k: 10
+
   # Legacy settings (for backward compatibility with existing code)
   # Query generation
   num_queries: 3  # Number of search queries to generate from question
@@ -146,7 +159,6 @@ retrieval:
 
   # Web search settings (if web search is still used)
   max_search_chars: 1000  # Maximum characters to keep from search results
-  max_web_search_results: 10
   include_title: false  # Include title in search snippets
   ddgs_backend: "yandex,yahoo,wikipedia,grokipedia"  # DDGS search backends to use
 

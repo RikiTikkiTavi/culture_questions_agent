@@ -131,7 +131,6 @@ mlflow ui --backend-store-uri sqlite:///tracking/mlruns.sqlite
                     │  LanceDB Vector Store   │
                     │  • Dense: BGE-M3        │
                     │  • Sparse: BM25         │
-                    │  • ColBERT Reranking    │
                     └─────────────────────────┘
 
 ┌─────────────────────────────────────────────────────────────────┐
@@ -167,7 +166,7 @@ Input Question (MCQ/SAQ)
          ▼
 ┌─────────────────────────────────────┐
 │  4. Grouped Reranking               │
-│  • Web + Wiki: top-6 (BGE v2-m3)    │
+│  • Web + Wiki: top-6 (ColBERT)      │
 │  • Training Data: top-4 (BGE v2-m3) │
 └─────────────────────────────────────┘
          │
@@ -197,8 +196,8 @@ Input Question (MCQ/SAQ)
    - Fusion strategies
 
 3. **Reranking** ([`workflow.py`](src/culture_questions_agent/workflow.py))
-   - BGE-reranker-v2-m3 (cross-encoder)
-   - ColBERT (late-interaction)
+   - ColBERT (late-interaction) for Wikipedia + Web Search
+   - BGE-reranker-v2-m3 (cross-encoder) for Training Data
    - Grouped reranking by source
 
 4. **Prediction** ([`src/culture_questions_agent/predictor/`](src/culture_questions_agent/predictor/))
