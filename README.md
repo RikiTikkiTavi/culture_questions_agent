@@ -167,14 +167,14 @@ Input Question (MCQ/SAQ)
          ▼
 ┌─────────────────────────────────────┐
 │  4. Grouped Reranking               │
-│  • Web + Wiki: top-6 (BGE v2-m3)   │
-│  • Training Data: top-4 (ColBERT)  │
+│  • Web + Wiki: top-6 (BGE v2-m3)    │
+│  • Training Data: top-4 (BGE v2-m3) │
 └─────────────────────────────────────┘
          │
          ▼
 ┌─────────────────────────┐
 │  5. Prediction          │
-│  • MCQ: NLL or Generate │
+│  • MCQ: Logits          │
 │  • SAQ: Generate        │
 └─────────────────────────┘
          │
@@ -202,7 +202,7 @@ Input Question (MCQ/SAQ)
    - Grouped reranking by source
 
 4. **Prediction** ([`src/culture_questions_agent/predictor/`](src/culture_questions_agent/predictor/))
-   - Discriminative: NLL-based (for MCQ)
+   - Discriminative: Logits-based (for MCQ)
    - Generative: Text generation (for SAQ)
 
 ## 📖 Usage
@@ -362,7 +362,3 @@ The project follows a modular architecture:
 ## 📝 License
 
 MIT
-
----
-
-**Note:** This system is designed for the Cultural QA competition and is optimized for questions about China, Iran, the United Kingdom, and the United States.
