@@ -75,7 +75,7 @@ class MultiRetrieverOrchestrator:
                 unique_nodes.append(nws)
         return unique_nodes
 
-    def retrieve(
+    async def retrieve(
         self,
         query: str,
     ) -> List[NodeWithScore]:
@@ -105,7 +105,7 @@ class MultiRetrieverOrchestrator:
             retriever_name = self.names[i]            
             try:
                 # All retrievers implement BaseRetriever.retrieve()
-                results = retriever.retrieve(query)
+                results = await retriever.aretrieve(query)
                 results = self._deduplicate(results)
                 
                 logger.info(f"✓ Retrieved {len(results)} results from retriever={retriever_name} for question='{query}'")
@@ -135,7 +135,7 @@ class MultiRetrieverOrchestrator:
         
         return final_results
     
-    def retrieve_batch(
+    async def retrieve_batch(
         self,
         queries: List[str],
     ) -> List[NodeWithScore]:
@@ -153,7 +153,7 @@ class MultiRetrieverOrchestrator:
         all_results = []
         for i, query in enumerate(queries, 1):
             logger.debug(f"\n--- Query {i}/{len(queries)} ---")
-            results = self.retrieve(query)
+            results = await self.retrieve(query)
             all_results.extend(results)
         
         len_before = len(all_results)

@@ -73,8 +73,9 @@ class CulturalQAWorkflow(Workflow):
     """
     Event-driven workflow for Cultural QA using:
     - LLM-based query generation
-    - Wikipedia/DDGS web search for context retrieval
-    - NLL-based prediction using HuggingFace transformers
+    - Retrieval from ingested Wikipedia, ingested training questions,  and web search
+    - Reranking
+    - MCQ prediction by peeking into logits or SAQ generation
     """
 
     def __init__(self, cfg, *args, **kwargs):
@@ -108,7 +109,7 @@ class CulturalQAWorkflow(Workflow):
         # Store predictor type for validation
         self.predictor_type = predictor_type
 
-        # [1] Initialize Predictor using factory
+        # [1] Initialize Predictor
         logger.info(
             f"[1/5] Initializing {predictor_type.capitalize()} Predictor: {cfg.model.llm_name}"
         )
@@ -129,16 +130,17 @@ class CulturalQAWorkflow(Workflow):
         retrievers = []
         retriever_names = []
         
+        # Initialize wikipedia and wikivoyage retriever
         if cfg.retrieval.get("use_wiki_retrieval", True):
             logger.info(f"Initializing Wiki-Retriever")
-            wiki_store = LanceDBVectorStore(uri=cfg.vector_store.get("lancedb_path", "storage/lancedb"), table_name="wiki_like")
+            wiki_store = LanceDBVectorStore(uri=cfg.ingestion.get("lancedb_path", "storage/lancedb"), table_name="wiki_like")
             if cfg.retrieval.get("use_colbert", True):
                 reranker = ColbertReranker()
                 wiki_store._add_reranker(reranker)
             wiki_index = VectorStoreIndex.from_vector_store(
                 vector_store=wiki_store,
                 embed_model=HuggingFaceEmbedding(
-                    model_name=cfg.vector_store.embedding_model_name,
+                    model_name=cfg.model.embedding_model_name,
                     cache_folder=cfg.model.cache_dir,
                 ),
             )
@@ -150,16 +152,17 @@ class CulturalQAWorkflow(Workflow):
             retrievers.append(wiki_retriever)
             retriever_names.append("wiki")
         
+        # Initialize train-data retriever
         if cfg.retrieval.get("use_train_data_retrieval", True):
             logger.info(f"Initializing train-data retriever")
-            q_store = LanceDBVectorStore(uri=cfg.vector_store.get("lancedb_path", "storage/lancedb"), table_name="question_like")
+            q_store = LanceDBVectorStore(uri=cfg.ingestion.get("lancedb_path", "storage/lancedb"), table_name="question_like")
             if cfg.retrieval.get("use_colbert", True):
                 reranker = ColbertReranker()
                 q_store._add_reranker(reranker)
             q_index = VectorStoreIndex.from_vector_store(
                 vector_store=q_store,
                 embed_model=HuggingFaceEmbedding(
-                    model_name=cfg.vector_store.embedding_model_name,
+                    model_name=cfg.model.embedding_model_name,
                     cache_folder=cfg.model.cache_dir,
                 ),
             )
@@ -168,7 +171,8 @@ class CulturalQAWorkflow(Workflow):
             )
             retrievers.append(q_retriever)
             retriever_names.append("train_data")
-            
+        
+        # Initialize web-search retriever
         if cfg.retrieval.get("use_web_retrieval", False):
             # [3] Initialize Search Engine
             logger.info(f"Initializing Search Engine")
@@ -185,13 +189,13 @@ class CulturalQAWorkflow(Workflow):
         
         self.retriever = MultiRetrieverOrchestrator(retrievers=retrievers, names=retriever_names)
         
-        # [5] Unified reranker for combined results (local + web)
-        # Controlled by single use_reranker config option
         self.use_reranker = cfg.retrieval.get("use_reranker", True)
 
+        # Initialize reranker
+        # Web+Wiki and training data will be reranked separately
         if self.use_reranker:
             logger.info(
-                f"[5/5] Initializing FlagEmbeddingReranker: {cfg.model.get('reranker_name', 'BAAI/bge-reranker-v2-m3')}"
+                f"[5/5] Initializing BGE Reranker: {cfg.model.get('reranker_name', 'BAAI/bge-reranker-v2-m3')}"
             )
             # Note: cache_dir is set globally via HF_HOME environment variable above
             self.reranker = FlagEmbeddingReranker(
@@ -206,9 +210,7 @@ class CulturalQAWorkflow(Workflow):
     @step
     async def generate_queries(self, ev: StartEvent) -> QueryGenerationEvent:
         """
-        Generate search queries for dual-path retrieval.
-        Path 1: Question context queries (LLM-generated)
-        Path 2: Option verification queries (rule-based, MCQ only)
+        Generate search queries.
 
         Args:
             ev: StartEvent containing question field with Union[MCQQuestion, SAQQuestion]
@@ -239,8 +241,7 @@ class CulturalQAWorkflow(Workflow):
         question = question_obj.question
         
         question_type = "MCQ" if is_mcq else "SAQ"
-        logger.info(f"🧠 Query Generation for {question_type}: '{question}'")
-        logger.info(f"  Path 1: Generating context queries for question...")
+        logger.info(f"🧠 [Step 1/4] Query Generation for {question_type}: '{question}'")
 
         # Path 1: Generate queries or use direct question based on config
         use_direct_question = self.cfg.retrieval.get("use_direct_question", False)
@@ -251,8 +252,7 @@ class CulturalQAWorkflow(Workflow):
             )
             question_queries = [question]
         else:
-            question_queries = await asyncio.to_thread(
-                self.query_generator.generate_queries,
+            question_queries = self.query_generator.generate_queries(
                 question=question,
                 num_queries=self.cfg.retrieval.get("num_queries", 3)
             )
@@ -262,11 +262,6 @@ class CulturalQAWorkflow(Workflow):
 
         logger.info(f"  ✓ Generated {len(question_queries)} question queries")
         
-        if is_mcq:
-            logger.info(f"  Path 2: Planning option verification queries...")
-        else:
-            logger.info(f"  Path 2: Skipped (SAQ has no options)")
-
         return QueryGenerationEvent(
             question=question, 
             question_queries=question_queries, 
@@ -279,7 +274,7 @@ class CulturalQAWorkflow(Workflow):
         self, ev: QueryGenerationEvent
     ) -> RetrievalEvent:
         """
-        Retrieve documents from local index and web using SOTA multi-retriever orchestrator.
+        Retrieve documents using preconfigured multi-retriever
 
         Args:
             ev: QueryGenerationEvent with question queries
@@ -287,14 +282,14 @@ class CulturalQAWorkflow(Workflow):
         Returns:
             RetrievalEvent with raw retrieved documents
         """
-        logger.info(f"📚 [Step 1/4] Multi-Source Document Retrieval (Local + Web)")
+        logger.info(f"📚 [Step 2/4] Multi-Source Document Retrieval")
 
         all_docs = []
 
         if self.retriever:
 
             # Retrieve from all sources using orchestrator
-            all_docs = await asyncio.to_thread(self.retriever.retrieve_batch, ev.question_queries)
+            all_docs = await self.retriever.retrieve_batch(ev.question_queries)
 
             if all_docs:
                 logger.info(f"  ✓ Retrieved {len(all_docs)} documents from all sources")
@@ -315,7 +310,7 @@ class CulturalQAWorkflow(Workflow):
         self, ev: RetrievalEvent
     ) -> SearchEvent:
         """
-        Rerank retrieved documents using cross-encoder reranker.
+        Rerank retrieved documents using BGE reranker.
 
         Args:
             ev: RetrievalEvent with raw retrieved documents
@@ -323,7 +318,7 @@ class CulturalQAWorkflow(Workflow):
         Returns:
             CombinedRetrievalEvent with reranked context snippets
         """
-        logger.info(f"🔄 [Step 2/4] Document Reranking")
+        logger.info(f"🔄 [Step 3/4] Document Reranking")
 
         all_docs = ev.raw_documents
         context_snippets = []
@@ -414,28 +409,20 @@ class CulturalQAWorkflow(Workflow):
             f"🎯 [Step 4/4] Predicting {question_type} answer using {self.cfg.model.get('predictor_type', 'discriminative')} strategy..."
         )
 
-        # Get config flags for context enrichment
-        use_question_ctx = self.cfg.retrieval.get("use_question_context", True)
-        use_option_ctx = self.cfg.retrieval.get("use_option_context", True) and ev.is_mcq
-
-        question_ctx = ev.question_context if use_question_ctx else [""]
-        option_ctx = ev.option_contexts if (use_option_ctx and ev.option_contexts) else {}
-
         if ev.is_mcq:
-            # MCQ: Predict using configured predictor
-            best_option = await asyncio.to_thread(self.predictor.predict_best_option,
+            assert ev.options is not None, "MCQ questions must have options"
+            best_option = self.predictor.predict_best_option(
                 question=ev.question,
                 options=ev.options,
-                option_contexts=option_ctx,
-                question_contexts=question_ctx,
+                option_contexts={},
+                question_contexts=ev.question_context,
             )
             logger.info(f"Predicted MCQ Best Option: {best_option} for question: '{ev.question}'")
             return StopEvent(result=best_option)
         else:
-            # SAQ: Generate answer using generative predictor
-            answer = await asyncio.to_thread(self.predictor.predict_short_answer,
+            answer = self.predictor.predict_short_answer(
                 question=ev.question,
-                question_contexts=question_ctx,
+                question_contexts=ev.question_context,
             )
             logger.info(f"Generated SAQ Answer: {answer} for question: '{ev.question}'")
             return StopEvent(result=answer)

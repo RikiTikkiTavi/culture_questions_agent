@@ -19,29 +19,29 @@ def main(cfg):
     logger.info("Starting ingestion pipeline...")
 
     sentence_splitter = SentenceSplitter(
-        chunk_size=cfg.vector_store.get("chunk_size", 512),
-        chunk_overlap=cfg.vector_store.get("chunk_overlap", 50),
+        chunk_size=cfg.ingestion.get("chunk_size", 512),
+        chunk_overlap=cfg.ingestion.get("chunk_overlap", 50),
     )
 
     embedding_transform = HuggingFaceEmbedding(
-        model_name=cfg.vector_store.embedding_model_name,
-        cache_folder=cfg.vector_store.cache_dir,
+        model_name=cfg.model.embedding_model_name,
+        cache_folder=cfg.model.cache_dir,
     )
 
     # Wikipedia and Wikivoyage ingestion
     if not cfg.ingestion.get("skip_wiki", False):
         logger.info("Skipping Wikipedia and Wikivoyage ingestion as per config.")
         
-        countries = cfg.vector_store.get("country_filter_list", [])
-        topics = cfg.vector_store.get("topic_templates", [])
-        additional_pages = cfg.vector_store.get("additional_wikipedia_pages", [])
+        countries = cfg.ingestion.get("country_filter_list", [])
+        topics = cfg.ingestion.get("topic_templates", [])
+        additional_pages = cfg.ingestion.get("additional_wikipedia_pages", [])
 
         wiki_doc_store = SimpleDocumentStore()
-        wiki_store = LanceDBVectorStore(uri=cfg.vector_store.get("lancedb_path", "storage/lancedb"), table_name="wiki_like")
+        wiki_store = LanceDBVectorStore(uri=cfg.ingestion.get("lancedb_path", "storage/lancedb"), table_name="wiki_like")
 
 
         wiki_reader_cfg = ReaderConfig(
-            reader=WikipediaTopicReader(auto_suggest=cfg.vector_store.auto_suggest),
+            reader=WikipediaTopicReader(auto_suggest=cfg.ingestion.auto_suggest),
             reader_kwargs={
                 "templates": topics,
                 "country_list": countries,
@@ -52,7 +52,7 @@ def main(cfg):
         wikivoyage_reader_cfg = ReaderConfig(
             reader=WikivoyageReader(),
             reader_kwargs={
-                "xml_path": cfg.vector_store.get(
+                "xml_path": cfg.ingestion.get(
                     "wikivoyage_xml_path", "data/wikivoyage.xml"
                 ),
                 "country_filter": countries,
@@ -73,17 +73,17 @@ def main(cfg):
 
     # Training data ingestion
     if not cfg.ingestion.get("skip_training_data", False):
-        questions_like_store = LanceDBVectorStore(uri=cfg.vector_store.get("lancedb_path", "storage/lancedb"), table_name="question_like")
+        questions_like_store = LanceDBVectorStore(uri=cfg.ingestion.get("lancedb_path", "storage/lancedb"), table_name="question_like")
 
         pipeline_training_data = IngestionPipeline(
             readers=[
                 ReaderConfig(
                     reader=TrainingDataReader(),
                     reader_kwargs={
-                        "saq_path": cfg.vector_store.get(
+                        "saq_path": cfg.ingestion.get(
                             "training_saq_path", "data/saq_training_data.tsv"
                         ),
-                        "mcq_path": cfg.vector_store.get(
+                        "mcq_path": cfg.ingestion.get(
                             "training_mcq_path", "data/mcq_training_data.tsv"
                         ),
                     },
@@ -98,7 +98,7 @@ def main(cfg):
 
     # Web ingestion
     if not cfg.ingestion.get("skip_web", False):
-        web_like_store = LanceDBVectorStore(uri=cfg.vector_store.get("lancedb_path", "storage/lancedb"), table_name="web_like")
+        web_like_store = LanceDBVectorStore(uri=cfg.ingestion.get("lancedb_path", "storage/lancedb"), table_name="web_like")
         web_reader = hydra.utils.instantiate(cfg.ingestion.web_reader)
         docs = web_reader.lazy_load_data()
         pipeline_web = IngestionPipeline(

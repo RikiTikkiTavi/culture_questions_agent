@@ -10,7 +10,7 @@ logger = logging.getLogger(__name__)
 
 
 class SearchEngine(BaseRetriever):
-    """Search engine using Wikipedia and DDGS (multi-engine web search) as fallback.
+    """Search engine DDGS (multi-engine web search).
     
     Implements BaseRetriever interface for consistent integration with llama-index.
     """
@@ -46,35 +46,6 @@ class SearchEngine(BaseRetriever):
             logger.info("DDGS web search initialized successfully")
         except Exception as e:
             logger.warning(f"Failed to initialize DDGS: {e}")
-    
-    def search_wikipedia(self, query: str) -> str:
-        """
-        Search Wikipedia for a query.
-        
-        Args:
-            query: Search query
-            
-        Returns:
-            Wikipedia page content or empty string if not found
-        """
-        logger.info(f"Wikipedia search: '{query}'")
-        
-        try:
-            # search_data returns a string (page content) or an error message
-            wiki_text = self.wikipedia_tool.search_data(query)
-            
-            # Check for hard-coded failure strings from the tool spec
-            if wiki_text and "No search results" not in wiki_text and "Unable to load" not in wiki_text:
-                if len(wiki_text) > 100:  # Ensure we actually have substance
-                    logger.info(f"✓ Wikipedia found content ({len(wiki_text)} chars)")
-                    return wiki_text[:self.max_chars]  # Cap context window
-            
-            logger.debug(f"Wikipedia returned no useful content: {wiki_text[:50] if wiki_text else 'None'}...")
-            
-        except Exception as e:
-            logger.debug(f"Wikipedia tool error: {e}")
-        
-        return ""
 
 
     def search_web(self, query: str, max_results: int = 3, return_list: bool = False) -> str | List[str]:
@@ -141,17 +112,6 @@ class SearchEngine(BaseRetriever):
         query_str = query_bundle.query_str
         logger.debug(f"Web retrieval for: '{query_str}'")
         
-        # # Try Wikipedia first
-        # wiki_result = self.search_wikipedia(query_str)
-        # if wiki_result:
-        #     node = TextNode(
-        #         text=wiki_result,
-        #         metadata={"source": "wikipedia", "query": query_str}
-        #     )
-        #     return [NodeWithScore(node=node, score=1.0)]
-        
-        # # Fallback to DDGS web search
-        # logger.debug("Falling back to DDGS web search...")
         web_snippets = self.search_web(query_str, max_results=self.similarity_top_k, return_list=True)
         
         if isinstance(web_snippets, list) and web_snippets:
@@ -167,43 +127,3 @@ class SearchEngine(BaseRetriever):
             return nodes
         
         return []
-    
-    def search(self, query: str, max_results: int = 3) -> str:
-        """
-        Search for information using Wikipedia, fallback to DDGS web search.
-        
-        Args:
-            query: Search query
-            max_results: Maximum number of results for DDGS
-            
-        Returns:
-            Search results as text
-        """
-        logger.debug(f"Searching for: '{query}'")
-        
-        # Try Wikipedia first
-        wiki_result = self.search_wikipedia(query)
-        if wiki_result:
-            return wiki_result
-        
-        # Fallback to DDGS web search
-        logger.debug("Falling back to DDGS web search...")
-        return self.search_web(query, max_results, return_list=False)  # type: ignore
-    
-    def search_option_with_context(
-        self, 
-        option_text: str, 
-        context_str: str
-    ) -> str:
-        """
-        Search for an option with contextual keywords.
-        
-        Args:
-            option_text: The answer option text
-            context_str: Context keywords from question
-            
-        Returns:
-            Search results
-        """
-        query = f"{option_text} definition cultural meaning {context_str}"
-        return self.search(query)

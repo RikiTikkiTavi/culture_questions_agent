@@ -5,31 +5,38 @@ model:
   llm_name: "meta-llama/Meta-Llama-3-8B"
   cache_dir: "/data/horse/ws/s4610340-culture_agent/.cache"
   reranker_name: "BAAI/bge-reranker-v2-m3"  # Upgraded to v2-m3 for better quality
+  embedding_model_name: "BAAI/bge-m3"
   # Predictor type: "discriminative" (NLL-based) or "generative" (text generation)
   predictor_type: "generative"
   # Parameters for generative predictor
   max_new_tokens: 10
   temperature: 0.0
 
-vector_store:
-  auto_suggest: false
-  cache_dir: ${model.cache_dir}
-  embedding_model_name: "BAAI/bge-m3"
-  persist_dir: "storage/main"  # Main vector index
-  
-  # Data source configuration (NEW)
-  use_wikipedia: true  # Set to false to skip Wikipedia loading (e.g., if index already exists)
-  use_wikivoyage: true  # Set to false to skip Wikivoyage loading (e.g., if index already exists)
+ingestion:
   wikivoyage_xml_path: /data/horse/ws/s4610340-culture_agent/culture_questions_agent/data/wiki/datasets/wikivoyage.xml
-  wikivoyage_num_workers: 5  # Number of parallel workers for Wikivoyage parsing (null = CPU count - 1)
   
-  # Wikipedia caching (NEW)
-  wikipedia_cache_dir: "cache/wikipedia"  # Cache directory for downloaded Wikipedia pages
-  force_wikipedia_refresh: false  # Set to true to force re-download (ignore cache)
+  chunk_size: 256
+  chunk_overlap: 50
   
+  skip_wiki: false
+  skip_web: false
+  skip_training_data: false
+  
+  web_reader:
+    _target_: culture_questions_agent.ingestion.web.WebSearchReader
+    llm_name: ${model.llm_name}
+    cache_dir: ${model.cache_dir}
+    saq_path: "data/train_dataset_saq.csv"
+    mcq_path: "data/train_dataset_mcq.csv"
+    ddgs_backend: "yandex"
+    max_results_per_query: 3
+    max_workers: 10
+    limit_questions_type: "mcq"
+
+  lancedb_path: "storage/lancedb"
+
   # Country filtering (NEW) - Reduce dataset size
-  country_limit: null  # Limit to first N countries (null/commented for all countries)
-  country_filter_list:  # 10 diverse, culturally rich countries
+  country_filter_list: 
     - "China"
     - "Iran"
     - "United Kingdom"
@@ -110,53 +117,12 @@ vector_store:
     - "List of secondary education systems by country"
     - "Middle school"
 
+  auto_suggest: false
 
-  # Batch processing (NEW)
-  embed_batch_size: 128  # Batch size for embedding calculations (GPU memory dependent)
-  
-  chunk_size: 256
-  chunk_overlap: 50
-
-  # Note: These settings are removed as they're handled by SentenceSplitter now
-  # - chunking_strategy (removed)
-  # - granularities (removed)
-  # - tokenizer_name (removed)
-  # - target_tokens (removed)
-  # - max_tokens (removed)
-  
-  # Training data index (NEW)
-  use_training_index: true  # Build and include training data index
   training_mcq_path: "data/train_dataset_mcq.csv"
   training_saq_path: "data/train_dataset_saq.csv"
-  training_persist_dir: "storage/training"  # Training vector index
-  
-  colbert_index_path_main: "storage/colbert_index_main"  # Main ColBERT index (actual path)
-  colbert_index_name_main: "colbert_main"  #
-
-  colbert_index_path_training: "storage/colbert_index_training"  # Training ColBERT index (actual path)
-  colbert_index_name_training: "colbert_training"  #
-
-  qdrant_path: "storage/qdrant"  # Qdrant vector database path
-
-ingestion:
-  skip_wiki: false
-  skip_web: false
-  skip_training_data: false
-  web_reader:
-    _target_: culture_questions_agent.ingestion.web.WebSearchReader
-    llm_name: ${model.llm_name}
-    cache_dir: ${model.cache_dir}
-    saq_path: "data/train_dataset_saq.csv"
-    mcq_path: "data/train_dataset_mcq.csv"
-    ddgs_backend: "yandex"
-    max_results_per_query: 3
-    max_workers: 10
-    limit_questions_type: "mcq"
 
 retrieval:
-  # Device configuration (H100 GPUs available)
-  device: "cuda"
-  
   # Multi-retriever configuration
   use_colbert: true    # Late-interaction retrieval (PRIMARY)
   use_reranker: true   # Cross-encoder reranking
@@ -177,17 +143,13 @@ retrieval:
   use_direct_question: false  # Use question directly for search instead of generating queries
   add_question_to_queries: true  # Append original question to generated queries
 
-  # Context usage
-  use_question_context: true  # Include question context in NLL prediction
-  use_option_context: false    # Include option-specific context in NLL prediction
-  
+
   # Web search settings (if web search is still used)
-  max_search_chars: 5000  # Maximum characters to keep from search results
+  max_search_chars: 1000  # Maximum characters to keep from search results
   max_web_search_results: 10
   include_title: false  # Include title in search snippets
   ddgs_backend: "yandex,yahoo,wikipedia,grokipedia"  # DDGS search backends to use
 
-  include_options_in_query: false  # Include options in search query when using reranker
 
 # Optional: Run test query after building index
 run_test_query: false  # Set to true to validate retrieval system
@@ -211,11 +173,5 @@ saq_submission_output_path: "data/saq_prediction.tsv"
 
 # Inference optimization settings
 inference:
-  max_concurrent: 8  # Maximum concurrent predictions (adjust based on GPU memory)
-  num_processes: 2
-  # Recommended values:
-  # - H100 80GB: 12-16
-  # - H100 40GB: 8-12
-  # - A100 80GB: 10-14
-  # - A100 40GB: 6-10
-  # - V100 32GB: 4-6
+  max_concurrent: 10 
+  num_processes: 0

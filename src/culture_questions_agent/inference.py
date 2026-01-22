@@ -152,16 +152,17 @@ async def predict_mcq_batch(
         questions: List of MCQ questions
         max_concurrent: Maximum concurrent predictions per process (default: 8)
         num_processes: Number of parallel processes (default: 1)
+                      Set to 0 for dummy pool (no multiprocessing)
         
     Returns:
         List of prediction dictionaries with MCQID and answer choices
     """
-    if num_processes <= 1:
-        # Single process mode - use original async implementation
+    if num_processes == 0:
+        # Dummy pool mode - no multiprocessing, run in main process
         workflow = CulturalQAWorkflow(cfg, timeout=120)
         semaphore = asyncio.Semaphore(max_concurrent)
         
-        logger.info(f"Processing {len(questions)} MCQ questions with max {max_concurrent} concurrent tasks")
+        logger.info(f"Processing {len(questions)} MCQ questions with dummy pool (no multiprocessing), max {max_concurrent} concurrent tasks")
         
         tasks = [
             predict_single_mcq_question(workflow, question, semaphore)
@@ -259,20 +260,21 @@ async def predict_saq_batch(
         question_ids: List of question identifiers
         max_concurrent: Maximum concurrent predictions per process (default: 8)
         num_processes: Number of parallel processes (default: 1)
+                      Set to 0 for dummy pool (no multiprocessing)
         
     Returns:
         List of prediction dictionaries with ID and generated answer
     """
-    if num_processes <= 1:
-        # Single process mode - use original async implementation
+    if num_processes == 0:
+        # Dummy pool mode - no multiprocessing, run in main process
         workflow = CulturalQAWorkflow(cfg, timeout=120)
         semaphore = asyncio.Semaphore(max_concurrent)
         
-        logger.info(f"Processing {len(questions)} SAQ questions with max {max_concurrent} concurrent tasks")
+        logger.info(f"Processing {len(questions)} SAQ questions with dummy pool (no multiprocessing), max {max_concurrent} concurrent tasks")
         
         tasks = [
-            predict_single_saq_question(workflow, question, question_id, semaphore)
-            for question, question_id in zip(questions, question_ids)
+            predict_single_saq_question(workflow, question, semaphore)
+            for question in questions
         ]
         
         results = []
