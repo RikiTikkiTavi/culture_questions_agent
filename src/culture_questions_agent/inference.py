@@ -115,7 +115,7 @@ def process_mcq_chunk(args: tuple) -> List[Dict]:
     cfg, questions, max_concurrent, chunk_id = args
     
     # Initialize workflow in this process
-    workflow = CulturalQAWorkflow(cfg, timeout=120)
+    workflow = CulturalQAWorkflow(cfg, timeout=600)
     
     # Run async batch prediction
     async def _process():
@@ -159,7 +159,7 @@ async def predict_mcq_batch(
     """
     if num_processes == 0:
         # Dummy pool mode - no multiprocessing, run in main process
-        workflow = CulturalQAWorkflow(cfg, timeout=120)
+        workflow = CulturalQAWorkflow(cfg, timeout=600)
         semaphore = asyncio.Semaphore(max_concurrent)
         
         logger.info(f"Processing {len(questions)} MCQ questions with dummy pool (no multiprocessing), max {max_concurrent} concurrent tasks")
@@ -221,7 +221,7 @@ def process_saq_chunk(args: tuple) -> List[Dict]:
     cfg, questions, max_concurrent, chunk_id = args
     
     # Initialize workflow in this process
-    workflow = CulturalQAWorkflow(cfg, timeout=120)
+    workflow = CulturalQAWorkflow(cfg, timeout=600)
     
     # Run async batch prediction
     async def _process():
@@ -267,7 +267,7 @@ async def predict_saq_batch(
     """
     if num_processes == 0:
         # Dummy pool mode - no multiprocessing, run in main process
-        workflow = CulturalQAWorkflow(cfg, timeout=120)
+        workflow = CulturalQAWorkflow(cfg, timeout=600)
         semaphore = asyncio.Semaphore(max_concurrent)
         
         logger.info(f"Processing {len(questions)} SAQ questions with dummy pool (no multiprocessing), max {max_concurrent} concurrent tasks")
