@@ -89,6 +89,8 @@ class CulturalQAWorkflow(Workflow):
         super().__init__(*args, **kwargs)
         self.cfg = cfg
 
+        self.lock = asyncio.Lock()
+
         logger.info("=" * 80)
         logger.info(
             "Initializing Cultural QA Workflow (LLM Query Generation + Configurable Prediction)"
@@ -122,10 +124,11 @@ class CulturalQAWorkflow(Workflow):
             temperature=cfg.model.get("temperature", 0.0),
         )
 
-        # [2] Initialize Query Generator (reuses the same model/tokenizer for discriminative)
-        logger.info(f"[2/5] Initializing Query Generator")
+        # [2] Initialize Query Generator (reuses the same model/tokenizer instance)
+        logger.info(f"[2/5] Initializing Query Generator (sharing model with predictor)")
         self.query_generator = QueryGenerator(
-            model=cfg.model.llm_name, 
+            model=self.predictor.model,
+            tokenizer=self.predictor.tokenizer,
         )
 
         retrievers = []
@@ -254,10 +257,11 @@ class CulturalQAWorkflow(Workflow):
             )
             question_queries = [question]
         else:
-            question_queries = self.query_generator.generate_queries(
-                question=question,
-                num_queries=self.cfg.retrieval.get("num_queries", 3)
-            )
+            async with self.lock:
+                question_queries = self.query_generator.generate_queries(
+                    question=question,
+                    num_queries=self.cfg.retrieval.get("num_queries", 3)
+                )
         
         if self.cfg.retrieval.get("add_question_to_queries", True):
             question_queries.append(question)
@@ -355,8 +359,9 @@ class CulturalQAWorkflow(Workflow):
                             for i in range(len(group_docs))
                         ]
                     )
-                    # Rerank all nodes and slice to top_k (thread-safe - no state mutation)
-                    reranked_nodes = await reranker.apostprocess_nodes(group_docs, query_str=ev.question)
+                    # Rerank all nodes with lock to prevent concurrent access to reranker
+                    async with self.lock:
+                        reranked_nodes = await reranker.apostprocess_nodes(group_docs, query_str=ev.question)
                     
                     # Extract documents and scores
                     selected_docs = [node.node.get_content() for node in reranked_nodes]
@@ -399,20 +404,21 @@ class CulturalQAWorkflow(Workflow):
             f"🎯 [Step 4/4] Predicting {question_type} answer using {self.cfg.model.get('predictor_type', 'discriminative')} strategy..."
         )
 
-        if ev.is_mcq:
-            assert ev.options is not None, "MCQ questions must have options"
-            best_option = self.predictor.predict_best_option(
-                question=ev.question,
-                options=ev.options,
-                option_contexts={},
-                question_contexts=ev.question_context,
-            )
-            logger.info(f"Predicted MCQ Best Option: {best_option} for question: '{ev.question}'")
-            return StopEvent(result=best_option)
-        else:
-            answer = self.predictor.predict_short_answer(
-                question=ev.question,
-                question_contexts=ev.question_context,
-            )
-            logger.info(f"Generated SAQ Answer: {answer} for question: '{ev.question}'")
-            return StopEvent(result=answer)
+        async with self.lock:
+            if ev.is_mcq:
+                assert ev.options is not None, "MCQ questions must have options"
+                best_option = await self.predictor.predict_best_option(
+                    question=ev.question,
+                    options=ev.options,
+                    option_contexts={},
+                    question_contexts=ev.question_context,
+                )
+                logger.info(f"Predicted MCQ Best Option: {best_option} for question: '{ev.question}'")
+                return StopEvent(result=best_option)
+            else:
+                answer = await self.predictor.predict_short_answer(
+                    question=ev.question,
+                    question_contexts=ev.question_context,
+                )
+                logger.info(f"Generated SAQ Answer: {answer} for question: '{ev.question}'")
+                return StopEvent(result=answer)

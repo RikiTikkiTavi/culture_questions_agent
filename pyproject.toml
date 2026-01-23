@@ -43,6 +43,7 @@ llama-index-vector-stores-lancedb = "^0.4.4"
 aiostream = "^0.7.1"
 tantivy = "^0.25.1"
 rerankers = "^0.10.0"
+llama-index-postprocessor-colbert-rerank = "^0.4.1"
 
 [build-system]
 requires = ["poetry-core>=1.0.0"]

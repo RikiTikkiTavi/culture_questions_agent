@@ -142,12 +142,13 @@ retrieval:
       reranker:
         _target_: llama_index.postprocessor.colbert_rerank.ColbertRerank
         top_n: 6
+        device: "cuda:0"
         model: "colbert-ir/colbertv2.0"
         tokenizer: "colbert-ir/colbertv2.0"
         keep_retrieval_score: true
   
-  wiki_top_k: 25
-  web_top_k: 10
+  wiki_top_k: 15
+  web_top_k: 6
   train_data_top_k: 10
 
   # Legacy settings (for backward compatibility with existing code)
@@ -185,5 +186,5 @@ saq_submission_output_path: "data/saq_prediction.tsv"
 
 # Inference optimization settings
 inference:
-  max_concurrent: 10 
+  max_concurrent: 5
   num_processes: 0

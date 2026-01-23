@@ -1,5 +1,6 @@
 """Generative LLM predictor using standard text generation."""
 
+import asyncio
 import logging
 import re
 from typing import Dict, Tuple
@@ -58,6 +59,9 @@ class GenerativePredictor(BasePredictor):
         
         self.max_new_tokens = max_new_tokens
         self.temperature = temperature
+        
+        # Thread-safety lock for model access
+        self._lock = asyncio.Lock()
 
         # Load Jinja2 prompt template
         template_dir = Path(__file__).parent.parent.parent.parent / "prompts"
@@ -119,7 +123,7 @@ class GenerativePredictor(BasePredictor):
         assert len(token_ids) > 0, "No token IDs found for option"
         return token_ids
 
-    def predict_best_option(
+    async def predict_best_option(
         self,
         question: str,
         options: Dict[str, str],
@@ -142,76 +146,77 @@ class GenerativePredictor(BasePredictor):
         """
         logger.info(f"Evaluating {len(options)} options using generative prediction...")
         
-        with mlflow.start_span(name="predict_best_option") as span:
-            span.set_inputs({
-                "question": question,
-                "options": options,
-                "option_contexts": option_contexts,
-                "question_contexts": question_contexts,
-            })
-            
-            # Build formatted context sections
-            context_parts = []
-            
-            # Add question contexts (numbered)
-            if question_contexts:
-                for i, ctx in enumerate(question_contexts, 1):
-                    if ctx.strip():
-                        context_parts.append(f"[{i}] {ctx.strip()}")
-            
-            # Add option-specific contexts (if exist)
-            for opt_key in sorted(options.keys()):
-                option_context = option_contexts.get(opt_key, "")
-                if option_context.strip():
-                    context_parts.append(f"[{opt_key} - Definition] {option_context.strip()}")
-            
-            with mlflow.start_span(name="generate_answer", span_type="LLM") as gen_span:
-                # Render prompt from template
-                prompt = self.mcq_template.render(
-                    context_parts=context_parts,
-                    question=question,
-                    options=options,
-                )
-                gen_span.set_inputs({"prompt": prompt})
+        async with self._lock:
+            with mlflow.start_span(name="predict_best_option") as span:
+                span.set_inputs({
+                    "question": question,
+                    "options": options,
+                    "option_contexts": option_contexts,
+                    "question_contexts": question_contexts,
+                })
                 
-                # Tokenize
-                inputs = self.tokenizer(
-                    prompt,
-                    return_tensors="pt",
-                    truncation=True,
-                    max_length=16384
-                ).to(self.model.device) # type: ignore
+                # Build formatted context sections
+                context_parts = []
                 
-                # Forward pass
-                with torch.no_grad():
-                    outputs = self.model(**inputs)
-                    logits = outputs.logits  # [1, seq_len, vocab]
+                # Add question contexts (numbered)
+                if question_contexts:
+                    for i, ctx in enumerate(question_contexts, 1):
+                        if ctx.strip():
+                            context_parts.append(f"[{i}] {ctx.strip()}")
+                
+                # Add option-specific contexts (if exist)
+                for opt_key in sorted(options.keys()):
+                    option_context = option_contexts.get(opt_key, "")
+                    if option_context.strip():
+                        context_parts.append(f"[{opt_key} - Definition] {option_context.strip()}")
+                
+                with mlflow.start_span(name="generate_answer", span_type="LLM") as gen_span:
+                    # Render prompt from template
+                    prompt = self.mcq_template.render(
+                        context_parts=context_parts,
+                        question=question,
+                        options=options,
+                    )
+                    gen_span.set_inputs({"prompt": prompt})
+                    
+                    # Tokenize
+                    inputs = self.tokenizer(
+                        prompt,
+                        return_tensors="pt",
+                        truncation=True,
+                        max_length=16384
+                    ).to(self.model.device) # type: ignore
+                    
+                    # Forward pass
+                    with torch.no_grad():
+                        outputs = self.model(**inputs)
+                        logits = outputs.logits  # [1, seq_len, vocab]
 
-                # Get next-token logits
-                next_token_logits = logits[0, -1]
+                    # Get next-token logits
+                    next_token_logits = logits[0, -1]
 
-                # Force leading-space options (LLaMA-3 correct)
-                option_scores = {}
-                for opt_key in options.keys():
-                    token_ids = self.get_option_token_ids(opt_key)
-                    option_scores[opt_key] = torch.logsumexp(
-                        torch.tensor([next_token_logits[i] for i in token_ids]),
-                        dim=0
-                    ).item()
+                    # Force leading-space options (LLaMA-3 correct)
+                    option_scores = {}
+                    for opt_key in options.keys():
+                        token_ids = self.get_option_token_ids(opt_key)
+                        option_scores[opt_key] = torch.logsumexp(
+                            torch.tensor([next_token_logits[i] for i in token_ids]),
+                            dim=0
+                        ).item()
 
-                # Pick highest logit
-                best_option = max(
-                    option_scores.keys(),
-                    key=lambda opt: option_scores[opt]
-                )
+                    # Pick highest logit
+                    best_option = max(
+                        option_scores.keys(),
+                        key=lambda opt: option_scores[opt]
+                    )
 
-                span.set_outputs({"predicted_option": best_option})
+                    span.set_outputs({"predicted_option": best_option})
+                
+                logger.info(f"✓ Selected option {best_option}")
             
-            logger.info(f"✓ Selected option {best_option}")
-        
-        return best_option
+            return best_option
 
-    def predict_short_answer(
+    async def predict_short_answer(
         self,
         question: str,
         question_contexts: list[str]
@@ -228,61 +233,62 @@ class GenerativePredictor(BasePredictor):
         """
         logger.info("Generating short answer using generative prediction...")
         
-        with mlflow.start_span(name="predict_short_answer") as span:
-            span.set_inputs({
-                "question": question,
-                "question_contexts": question_contexts,
-            })
-            
-            # Build formatted context sections
-            context_parts = []
-            
-            # Add question contexts (numbered)
-            if question_contexts:
-                for i, ctx in enumerate(question_contexts, 1):
-                    if ctx.strip():
-                        context_parts.append(f"[{i}] {ctx.strip()}")
-            
-            with mlflow.start_span(name="generate_answer", span_type="LLM") as gen_span:
-                # Render prompt from template
-                prompt = self.saq_template.render(
-                    context_parts=context_parts,
-                    question=question,
-                )
-                gen_span.set_inputs({"prompt": prompt})
+        async with self._lock:
+            with mlflow.start_span(name="predict_short_answer") as span:
+                span.set_inputs({
+                    "question": question,
+                    "question_contexts": question_contexts,
+                })
                 
-                # Generate answer
-                inputs = self.tokenizer(
-                    prompt,
-                    return_tensors="pt",
-                    truncation=True,
-                    max_length=16384,
-                ).to(self.model.device) # type: ignore
+                # Build formatted context sections
+                context_parts = []
                 
-                # Generate
-                with torch.no_grad():
-                    outputs = self.model.generate( # type: ignore
-                        **inputs,
-                        max_new_tokens=20,
-                        do_sample=False,
-                        pad_token_id=self.tokenizer.pad_token_id, # type: ignore
-                        eos_token_id=self.tokenizer.eos_token_id, # type: ignore
-                        tokenizer=self.tokenizer,
+                # Add question contexts (numbered)
+                if question_contexts:
+                    for i, ctx in enumerate(question_contexts, 1):
+                        if ctx.strip():
+                            context_parts.append(f"[{i}] {ctx.strip()}")
+                
+                with mlflow.start_span(name="generate_answer", span_type="LLM") as gen_span:
+                    # Render prompt from template
+                    prompt = self.saq_template.render(
+                        context_parts=context_parts,
+                        question=question,
                     )
-                
-                # Decode only the generated part (skip the input prompt)
-                generated_ids = outputs[0][inputs["input_ids"].shape[1]:]
-                generated_text = self.tokenizer.decode(generated_ids, skip_special_tokens=True) # type: ignore
-                # Find the text in "" using regex
-                
-                match = re.search(r'"(.*?)"', generated_text)
-                if match:
-                    generated_text = match.group(1)
-                else:
-                    generated_text = generated_text.strip()
-                
-                generated_text = generated_text.replace('"', '').replace("“", "").replace("”", "").replace("'", "")
+                    gen_span.set_inputs({"prompt": prompt})
+                    
+                    # Generate answer
+                    inputs = self.tokenizer(
+                        prompt,
+                        return_tensors="pt",
+                        truncation=True,
+                        max_length=16384,
+                    ).to(self.model.device) # type: ignore
+                    
+                    # Generate
+                    with torch.no_grad():
+                        outputs = self.model.generate( # type: ignore
+                            **inputs,
+                            max_new_tokens=20,
+                            do_sample=False,
+                            pad_token_id=self.tokenizer.pad_token_id, # type: ignore
+                            eos_token_id=self.tokenizer.eos_token_id, # type: ignore
+                            tokenizer=self.tokenizer,
+                        )
+                    
+                    # Decode only the generated part (skip the input prompt)
+                    generated_ids = outputs[0][inputs["input_ids"].shape[1]:]
+                    generated_text = self.tokenizer.decode(generated_ids, skip_special_tokens=True) # type: ignore
+                    # Find the text in "" using regex
+                    
+                    match = re.search(r'"(.*?)"', generated_text)
+                    if match:
+                        generated_text = match.group(1)
+                    else:
+                        generated_text = generated_text.strip()
+                    
+                    generated_text = generated_text.replace('"', '').replace(""", "").replace(""", "").replace("'", "")
 
-                gen_span.set_outputs({"generated_answer": generated_text})
-        
-        return generated_text
+                    gen_span.set_outputs({"generated_answer": generated_text})
+            
+            return generated_text

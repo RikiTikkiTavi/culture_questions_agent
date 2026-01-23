@@ -14,22 +14,18 @@ logger = logging.getLogger(__name__)
 class QueryGenerator:
     """Generate search queries from questions using LLM."""
     
-    def __init__(self, model):
+    def __init__(self, model, tokenizer):
         """
         Initialize query generator with pre-loaded model.
         
         Args:
-            model: HuggingFace CausalLM model
-            tokenizer: HuggingFace tokenizer
+            model: HuggingFace CausalLM model instance
+            tokenizer: HuggingFace tokenizer instance
         """
-        logger.info("Initializing LLM-based Query Generator")
+        logger.info("Initializing LLM-based Query Generator (reusing shared model)")
 
-        self.model = AutoModelForCausalLM.from_pretrained(model) # type: ignore
-        self.tokenizer = AutoTokenizer.from_pretrained(model)
-
-        # Set pad token if not set
-        if self.tokenizer.pad_token is None:
-            self.tokenizer.pad_token = self.tokenizer.eos_token
+        self.model = model
+        self.tokenizer = tokenizer
                 
         # Load Jinja2 templates
         template_dir = Path(__file__).parent.parent.parent / "prompts"
