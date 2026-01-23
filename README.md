@@ -6,7 +6,7 @@ A Retrieval-Augmented Generation (RAG) system for answering cultural questions a
 
 - 🔍 **Multi-Source Retrieval**: Wikipedia, Wikivoyage, web search, and training data
 - 🎯 **Hybrid Search**: Dense (BGE-M3) + Sparse (BM25) retrieval
-- 🔄 **Advanced Reranking**: Cross-encoder (BGE-reranker-v2-m3) or Late-Interaction (ColBERT)
+- 🔄 **Advanced Reranking**: Late-Interaction (ColBERT) followed by Cross-encoder (BGE-reranker-v2-m3)
 - 🧠 **LLM-based Query Generation**: Semantic query expansion using Llama-3-8B
 - 📊 **Two Question Types**: Multiple Choice Questions (MCQ) and Short Answer Questions (SAQ)
 - ⚡ **Async Workflow**: Event-driven architecture using LlamaIndex Workflows
@@ -164,11 +164,25 @@ Input Question (MCQ/SAQ)
 └─────────────────────────┘
          │
          ▼
-┌─────────────────────────────────────┐
-│  4. Grouped Reranking               │
-│  • Web + Wiki: top-6 (ColBERT)      │
-│  • Training Data: top-4 (BGE v2-m3) │
-└─────────────────────────────────────┘
+┌───────────────────────────────────────────────────────────┐
+│  4. Multi-Stage Grouped Reranking                         │
+│                                                           │
+│  Stage 1: Source-Specific Reranking                       │
+│  ┌─────────────────────────────────────────────────────┐  │
+│  │ • Training Data → Cross-Encoder (BGE v2-m3) → top-4 │  │
+│  │ • Wiki         → Late-Interaction (ColBERT) → top-20│  │
+│  │ • Web          → Late-Interaction (ColBERT) → top-10│  │
+│  └─────────────────────────────────────────────────────┘  │
+│                                                           │
+│  Stage 2: Cross-Source Fusion                             │
+│  ┌─────────────────────────────────────────────────────┐  │
+│  │ • Wiki + Web   → Cross-Encoder (BGE v2-m3)  → top-8 │  │
+│  └─────────────────────────────────────────────────────┘  │
+│                                                           │
+│  Encoder Types:                                           │
+│  • Late-interaction (ColBERT): Token-level semantic filter│
+│  • Cross-encoder (BGE v2-m3): Joint query-doc reasoning   │
+└───────────────────────────────────────────────────────────┘
          │
          ▼
 ┌─────────────────────────┐
@@ -195,10 +209,15 @@ Input Question (MCQ/SAQ)
    - Content-based deduplication
    - Fusion strategies
 
-3. **Reranking** ([`workflow.py`](src/culture_questions_agent/workflow.py))
-   - ColBERT (late-interaction) for Wikipedia + Web Search
-   - BGE-reranker-v2-m3 (cross-encoder) for Training Data
-   - Grouped reranking by source
+3. **Multi-Stage Reranking** ([`workflow.py`](src/culture_questions_agent/workflow.py))
+   - **Stage 1 - Source-Specific**: 
+     - Training Data: Cross-encoder (BGE v2-m3) → top-4
+     - Wikipedia: Late-interaction (ColBERT) → top-20
+     - Web Search: Late-interaction (ColBERT) → top-10
+   - **Stage 2 - Cross-Source Fusion**:
+     - Wiki + Web: Cross-encoder (BGE v2-m3) → top-8
+   - Late-interaction (ColBERT) for token-level semantic filtering
+   - Cross-encoder (BGE v2-m3) for joint query-document reasoning
 
 4. **Prediction** ([`src/culture_questions_agent/predictor/`](src/culture_questions_agent/predictor/))
    - Discriminative: Logits-based (for MCQ)

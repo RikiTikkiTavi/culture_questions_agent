@@ -56,11 +56,13 @@ class MultiRetrieverOrchestrator:
     
     def _deduplicate(self, nodes: list[NodeWithScore]) -> list[NodeWithScore]:
         """Deduplicate NodeWithScore list by node_id."""
-        seen = set()
+        seen_id = set()
+        seen_content = set()
         unique_nodes = []
         for nws in nodes:
-            if nws.node.node_id not in seen:
-                seen.add(nws.node.node_id)
+            if nws.node.node_id not in seen_id and nws.node.get_content() not in seen_content:
+                seen_id.add(nws.node.node_id)
+                seen_content.add(nws.node.get_content())
                 unique_nodes.append(nws)
         return unique_nodes
 

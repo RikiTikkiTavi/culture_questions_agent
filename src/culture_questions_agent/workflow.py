@@ -1,6 +1,8 @@
 """Cultural QA Workflow using LLM-based Query Generation, Wikipedia/DuckDuckGo Search, and NLL-based prediction."""
 
 import asyncio
+from collections import defaultdict
+from email.policy import default
 import logging
 import os
 from pathlib import Path
@@ -196,6 +198,7 @@ class CulturalQAWorkflow(Workflow):
         self.use_reranker = cfg.retrieval.get("use_reranker", True)
 
         self.group_rerankers = []
+        self.stage_2_group_rerankers = []
         # Initialize reranker
         # Web+Wiki and training data will be reranked separately
         if self.use_reranker:
@@ -206,7 +209,12 @@ class CulturalQAWorkflow(Workflow):
                 logger.info(f"  Reranking group for sources: {group.get('sources', [])}, reranker: {group.get('reranker')}")
                 sources  = group.get("sources", [])
                 reranker = hydra.utils.instantiate(group.reranker)       
-                self.group_rerankers.append((sources, reranker))
+                if group.stage == 1:
+                    self.group_rerankers.append((sources, reranker))
+                elif group.stage == 2:
+                    self.stage_2_group_rerankers.append((sources, reranker))
+
+
         
         logger.info("=" * 80)
         logger.info("✓ Workflow initialized successfully!")
@@ -330,8 +338,10 @@ class CulturalQAWorkflow(Workflow):
         context_snippets = []
 
         if self.use_reranker and all_docs and self.group_rerankers:
-           
-            # Rerank in groups based on config
+            
+            source_to_nodes: Dict[str, list[NodeWithScore]] = defaultdict(list)
+
+            # Stage 1 reranking
             for sources, reranker in self.group_rerankers:
                 
                 # select docs for this group
@@ -347,29 +357,48 @@ class CulturalQAWorkflow(Workflow):
                     continue
 
                 logger.info(
-                    f"  Reranking group for sources {sources} with {len(group_docs)} docs..."
+                    f" Stage 1 Reranking group for sources {sources} with {len(group_docs)} docs..."
                 )
                 with mlflow.start_span(
-                    name="reranking_group_" + "_".join(sources),
+                    name="reranking_group_" + "_".join(sources) + "_stage_1",
                     span_type="RERANKER",
                 ) as span:
-                    span.set_inputs(
-                        [
-                            Document(group_docs[i], metadata={"source": sources})
-                            for i in range(len(group_docs))
-                        ]
-                    )
                     # Rerank all nodes with lock to prevent concurrent access to reranker
                     async with self.lock:
                         reranked_nodes = await reranker.apostprocess_nodes(group_docs, query_str=ev.question)
                     
-                    # Extract documents and scores
-                    selected_docs = [node.node.get_content() for node in reranked_nodes]
-                    logger.info(
-                        f"  ✓ Selected top {len(selected_docs)} snippets after reranking for group"
-                    )
-                    context_snippets.extend(selected_docs)
-                    span.set_outputs(reranked_nodes)
+                    for node in reranked_nodes:
+                        source = node.metadata.get("source")[0]
+                        source_to_nodes[source].append(node)
+
+            # Stage 2 reranking
+            for sources, reranker in self.stage_2_group_rerankers:
+                logger.info(
+                    f" Stage 2 Reranking group for sources {sources} with {len(group_docs)} docs..."
+                )
+
+                group_docs = []
+                for source in sources:
+                    group_docs.extend(source_to_nodes.get(source, []))
+
+                with mlflow.start_span(
+                    name="reranking_group_" + "_".join(sources) + "_stage_2",
+                    span_type="RERANKER",
+                ) as span:
+                    async with self.lock:
+                        reranked_nodes = await reranker.apostprocess_nodes(group_docs, query_str=ev.question)
+
+                    for source in sources:
+                        source_to_nodes[source] = []  # Clear previous
+
+                    for node in reranked_nodes:
+                        source = node.metadata.get("source")[0]
+                        source_to_nodes[source].append(node)
+                    
+                # Combine all reranked docs
+                for nodes in source_to_nodes.values():
+                    for node in nodes:
+                        context_snippets.append(node.node.get_content())
 
         else:
             # Even without reranking, limit to top_k to avoid context overflow

@@ -134,18 +134,35 @@ retrieval:
   # Reranking settings (cross-encoder)
   reranking_groups:
     - sources: ["train_data"]
+      stage: 1
       reranker:
         _target_: llama_index.postprocessor.flag_embedding_reranker.FlagEmbeddingReranker
         model: "BAAI/bge-reranker-v2-m3"
         top_n: 4
-    - sources: ["wiki", "web"]
+    - sources: ["wiki"]
+      stage: 1
       reranker:
         _target_: llama_index.postprocessor.colbert_rerank.ColbertRerank
-        top_n: 6
+        top_n: 20
         device: "cuda:0"
         model: "colbert-ir/colbertv2.0"
         tokenizer: "colbert-ir/colbertv2.0"
         keep_retrieval_score: true
+    - sources: ["web"]
+      stage: 1
+      reranker:
+        _target_: llama_index.postprocessor.colbert_rerank.ColbertRerank
+        top_n: 10
+        device: "cuda:0"
+        model: "colbert-ir/colbertv2.0"
+        tokenizer: "colbert-ir/colbertv2.0"
+        keep_retrieval_score: true
+    - sources: ["web", "wiki"]
+      stage: 2
+      reranker:
+        _target_: llama_index.postprocessor.flag_embedding_reranker.FlagEmbeddingReranker
+        model: "BAAI/bge-reranker-v2-m3"
+        top_n: 8
   
   wiki_top_k: 15
   web_top_k: 6
