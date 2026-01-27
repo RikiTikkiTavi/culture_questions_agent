@@ -1,3 +1,5 @@
 {
     "remote.autoForwardPorts": false,
+    "latex-workshop.docker.enabled": false,
+    "latex-workshop.docker.image.latex": "qmcgaw/latexdevcontainer:latest-full",
 }
