@@ -2,7 +2,7 @@
 
 #SBATCH --job-name="agent_inference"
 #SBATCH --account="p_ml_robotics"
-#SBATCH --time=7:00:00
+#SBATCH --time=2:30:00
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=6
@@ -16,7 +16,6 @@ cd /data/horse/ws/s4610340-culture_agent/culture_questions_agent
 
 source /data/horse/ws/s4610340-virtualenvs/culture-questions-agent/bin/activate
 
-python -m culture_questions_agent.inference model.predictor_type=generative task_type="saq"
 python -m culture_questions_agent.inference model.predictor_type=generative task_type="mcq"
 
 

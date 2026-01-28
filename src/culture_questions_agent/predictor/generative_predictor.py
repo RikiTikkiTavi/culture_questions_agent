@@ -111,7 +111,6 @@ class GenerativePredictor(BasePredictor):
         variants = [
             letter,          # "A"
             f" {letter}",    # " A"
-            f"\n{letter}",   # "\nA"
         ]
 
         token_ids = []
